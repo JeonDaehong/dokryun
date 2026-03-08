@@ -1,0 +1,34 @@
+# Build results
+bin/
+obj/
+_build_v7/
+
+# .NET
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# NuGet
+*.nupkg
+*.snupkg
+.nuget/
+packages/
+
+# Visual Studio
+.vs/
+*.rsuser
+*.userprefs
+
+# Rider
+.idea/
+
+# MonoGame Content Pipeline intermediate files
+Dokryun/Content/bin/
+Dokryun/Content/obj/
+
+# OS files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.DS_Store

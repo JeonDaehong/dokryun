@@ -1,0 +1,42 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dotnet new install MonoGame.Templates.CSharp)",
+      "Bash(dotnet new --install MonoGame.Templates.CSharp)",
+      "Bash(dotnet new mgdesktopgl -n Dokryun)",
+      "Bash(dotnet restore)",
+      "Bash(dotnet build)",
+      "Bash(winget install Microsoft.DotNet.SDK.8 --accept-package-agreements --accept-source-agreements)",
+      "Bash(export PATH=\"/c/Program Files/dotnet:$PATH\")",
+      "WebSearch",
+      "WebFetch(domain:store.steampowered.com)",
+      "WebFetch(domain:acequest.net)",
+      "WebFetch(domain:sephiria.miraheze.org)",
+      "Bash(taskkill //F //PID 29800)",
+      "Bash(tasklist)",
+      "Bash(dotnet run)",
+      "Bash(dotnet build Dokryun/Dokryun.csproj)",
+      "Bash(taskkill /PID 3480 /F)",
+      "Bash(taskkill //PID 3480 //F)",
+      "Bash(dotnet build --nologo -v q)",
+      "Bash(dotnet build --nologo)",
+      "Bash(dotnet build --nologo --no-restore -p:CopyBuildOutputToOutputDirectory=false)",
+      "Bash(dotnet build --nologo --no-restore)",
+      "Bash(taskkill //F //IM Dokryun.exe)",
+      "Bash(taskkill //F //PID 32456)",
+      "Bash(dotnet build --nologo -o bin/Debug/net8.0_new)",
+      "Bash(./Dokryun.exe)",
+      "Read(//c/Users/user/AppData/Local/Temp/claude/d--Dokryun/tasks/**)",
+      "Bash(dotnet build --nologo -o bin/Debug/net8.0_v2)",
+      "Bash(dotnet build --nologo -o bin/Debug/net8.0_v3)",
+      "Bash(start Dokryun.exe)",
+      "Bash(dotnet build Dokryun/Dokryun.csproj -o bin/Debug/net8.0_v4)",
+      "Bash(dotnet build Dokryun/Dokryun.csproj -o bin/Debug/net8.0_v5)",
+      "Bash(dotnet build Dokryun/Dokryun.csproj -o bin/Debug/net8.0_v6)",
+      "Bash(dotnet build Dokryun/Dokryun.csproj -o _build_v7)"
+    ],
+    "additionalDirectories": [
+      "C:\\Users\\user\\.claude\\projects\\d--Dokryun"
+    ]
+  }
+}

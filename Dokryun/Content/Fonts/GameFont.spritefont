@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<XnaContent xmlns:Graphics="Microsoft.Xna.Framework.Content.Pipeline.Graphics">
+  <Asset Type="Graphics:FontDescription">
+    <FontName>Malgun Gothic</FontName>
+    <Size>20</Size>
+    <Spacing>0</Spacing>
+    <UseKerning>true</UseKerning>
+    <Style>Regular</Style>
+    <CharacterRegions>
+      <!-- Basic Latin -->
+      <CharacterRegion>
+        <Start>&#32;</Start>
+        <End>&#126;</End>
+      </CharacterRegion>
+      <!-- Korean Syllables (가~힣) -->
+      <CharacterRegion>
+        <Start>&#44032;</Start>
+        <End>&#55203;</End>
+      </CharacterRegion>
+      <!-- Korean Jamo -->
+      <CharacterRegion>
+        <Start>&#12593;</Start>
+        <End>&#12643;</End>
+      </CharacterRegion>
+      <!-- Common symbols -->
+      <CharacterRegion>
+        <Start>&#8200;</Start>
+        <End>&#8299;</End>
+      </CharacterRegion>
+    </CharacterRegions>
+  </Asset>
+</XnaContent>
