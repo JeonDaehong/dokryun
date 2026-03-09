@@ -63,8 +63,7 @@ public class GameplayScene : Scene
     private float _comboTimer;
     private const float ComboWindow = 1.5f;
 
-    // Arrow rain
-    private float _arrowRainTimer;
+    // (removed: arrow rain timer)
 
     // Item pickup notification
     private string _itemPickupText;
@@ -86,12 +85,33 @@ public class GameplayScene : Scene
     // Ghost trail
     private List<(Vector2 pos, float alpha, bool flipX)> _ghostTrails = new();
 
+    // DrawSlash (발도) state
+    private bool _drawSlashReady;
+
+    // AfterImage (잔영) delayed slashes
+    private List<(Vector2 pos, float aimAngle, float damage, float range, float arc, float knockback, float timer)> _afterImageSlashes = new();
+
+    // GroundCrack (균열) delayed explosions
+    private List<(Vector2 pos, float damage, float timer, float maxTimer)> _groundCracks = new();
+
+    // WindBurst (바람) active timer
+    private float _windBurstActiveTimer;
+
+    // Synergy notification
+    private List<(string text, float timer, Color color)> _synergyNotifications = new();
+
     public override void Enter()
     {
         _pixel = new Texture2D(GraphicsDevice, 1, 1);
         _pixel.SetData(new[] { Color.White });
 
         _player = new Player();
+        if (Game1.SelectedClass == CharacterClass.Swordsman)
+        {
+            _player.IsSwordsman = true;
+            _player.Attack = 10f;
+            _player.LoadAnimations(Content.Load<Texture2D>("Sprites/Move"), Content.Load<Texture2D>("Sprites/Idle"), Content.Load<Texture2D>("Sprites/attack"));
+        }
         _enemies = new List<Enemy>();
         _camera = new Camera(GraphicsDevice.Viewport) { Zoom = 1.5f };
 
@@ -296,68 +316,73 @@ public class GameplayScene : Scene
             return; // Pause gameplay while inventory is open
         }
 
-        _player.Speed = 200f * _augmentStats.SpeedMultiplier;
+        _player.Speed = 200f;
         _player.Update(gameTime);
 
-        // Tile collision
-        _player.Position = _tileMap.ResolveCollision(_player.Position, 24, 24);
+        // Tile collision (swordsman: check around feet, offset +24 down)
+        if (_player.IsSwordsman)
+        {
+            var feetPos = _player.Position + new Vector2(0, 24);
+            var resolved = _tileMap.ResolveCollision(feetPos, 36, 38);
+            _player.Position = resolved - new Vector2(0, 24);
+        }
+        else
+            _player.Position = _tileMap.ResolveCollision(_player.Position, 24, 24);
 
         // Ghost trail
         if (_player.Velocity.LengthSquared() > 100)
         {
-            bool hasGhost = _augmentStats.GhostStep;
-            float interval = hasGhost ? 0.04f : 0.12f;
+            float interval = 0.12f;
             if (_gameTimer % interval < dt)
-            {
-                float alpha = hasGhost ? 0.6f : 0.2f;
-                _ghostTrails.Add((_player.Position, alpha, _player.FacingLeft));
-            }
+                _ghostTrails.Add((_player.Position, 0.2f, _player.FacingLeft));
         }
 
         // Dash effects
         if (_player.IsDashing)
         {
+            _drawSlashReady = _augmentStats.DrawSlash; // mark ready during dash
             AudioManager.Play("dash", 0.5f, 0.2f, 0.15f);
-            var dashColor = _augmentStats.LightningDash ? new Color(100, 150, 255) : new Color(180, 160, 130);
+            var dashColor = new Color(180, 160, 130);
             _particles.EmitTrail(_player.Position, dashColor);
             if (_player.Velocity.LengthSquared() > 100)
                 _particles.EmitSpeedLines(_player.Position, Vector2.Normalize(_player.Velocity), dashColor);
-
-            if (_augmentStats.LightningDash)
-            {
-                foreach (var enemy in _enemies)
-                {
-                    if (!enemy.IsActive || enemy.IsDead) continue;
-                    if (Vector2.Distance(enemy.Position, _player.Position) < 40)
-                    {
-                        enemy.TakeDamage(_augmentStats.LightningDashDamage);
-                        enemy.ApplyKnockback(enemy.Position - _player.Position, 200f);
-                        _particles.EmitBurst(enemy.Position, 12, new Color(100, 150, 255), 300f);
-                        AudioManager.Play("lightning", 0.5f, 0.1f, 0.05f);
-                    }
-                }
-            }
         }
 
-        // Player shoot arrow
+        // WindBurst timer
+        if (_windBurstActiveTimer > 0)
+        {
+            _windBurstActiveTimer -= dt;
+            _augmentStats.WindBurstTimer = _windBurstActiveTimer;
+        }
+
+        // Player attack
         if (InputManager.IsLeftHeld() && _player.CanAttack())
         {
-            _player.OnAttack(_augmentStats.FireRateMultiplier);
-            _attackCounter++;
-            ShootArrow();
-            AudioManager.Play("arrow_shoot", 0.5f, 0.15f, 0.05f);
-        }
+            float effectiveFireRate = _augmentStats.FireRateMultiplier;
+            // Berserker resonance: 1.5x if below 40% HP
+            if (_augmentStats.SynergyBerserkerResonance && _player.HP < (_player.MaxHP + _augmentStats.MaxHPBonus) * 0.4f)
+                effectiveFireRate *= 1.5f;
+            // WindBurst active: 2x attack speed
+            if (_windBurstActiveTimer > 0)
+                effectiveFireRate *= 2f;
 
-        // Arrow Rain
-        if (_augmentStats.ArrowRain)
-        {
-            _arrowRainTimer -= dt;
-            if (_arrowRainTimer <= 0)
+            _player.OnAttack(effectiveFireRate);
+            _attackCounter++;
+            if (_player.IsSwordsman)
             {
-                _arrowRainTimer = _augmentStats.ArrowRainCooldown;
-                PerformArrowRain();
+                SwordSlash();
+                // Combo sound: pitch gets lower per hit
+                float comboPitch = _player.ComboStep switch { 1 => -0.2f, 2 => -0.4f, _ => -0.6f };
+                AudioManager.Play("arrow_shoot", 0.6f, comboPitch, 0.05f);
+            }
+            else
+            {
+                ShootArrow();
+                AudioManager.Play("arrow_shoot", 0.5f, 0.15f, 0.05f);
             }
         }
+
+        // (Arrow Rain removed - swordsman only)
 
         // Update enemies with aggro
         foreach (var enemy in _enemies)
@@ -398,6 +423,52 @@ public class GameplayScene : Scene
         HandleProjectileCollisions();
         HandleProjectileWallCollisions();
 
+        // AfterImage delayed slashes
+        for (int i = _afterImageSlashes.Count - 1; i >= 0; i--)
+        {
+            var s = _afterImageSlashes[i];
+            s.timer -= dt;
+            _afterImageSlashes[i] = s;
+
+            if (s.timer <= 0)
+            {
+                PerformGhostSlash(s.pos, s.aimAngle, s.damage * 0.5f, s.range, s.arc, s.knockback * 0.5f);
+                _afterImageSlashes.RemoveAt(i);
+            }
+        }
+
+        // GroundCrack delayed explosions
+        for (int i = _groundCracks.Count - 1; i >= 0; i--)
+        {
+            var c = _groundCracks[i];
+            c.timer -= dt;
+            _groundCracks[i] = c;
+
+            float progress = 1f - (c.timer / c.maxTimer);
+            if (_gameTimer % 0.1f < dt)
+            {
+                _particles.EmitBurst(c.pos, 3, new Color(180, 120, 80) * (0.3f + progress * 0.7f), 30f + progress * 40f, 0.15f, 2f);
+            }
+
+            if (c.timer <= 0)
+            {
+                float synergyMul = _augmentStats.SynergyFocusResonance ? 2f : 1f;
+                PerformExplosion(c.pos, c.damage * synergyMul, 60f, new Color(180, 120, 80));
+                _camera.Shake(4f, 0.12f);
+                AudioManager.Play("explosion", 0.6f, 0.1f);
+                _groundCracks.RemoveAt(i);
+            }
+        }
+
+        // Synergy notifications decay
+        for (int i = _synergyNotifications.Count - 1; i >= 0; i--)
+        {
+            var n = _synergyNotifications[i];
+            n.timer -= dt;
+            _synergyNotifications[i] = n;
+            if (n.timer <= 0) _synergyNotifications.RemoveAt(i);
+        }
+
         // Enemy-player collision (GhostFire)
         foreach (var enemy in _enemies)
         {
@@ -408,10 +479,8 @@ public class GameplayScene : Scene
             {
                 if (dist < 20)
                 {
-                    float dmg = enemy.Attack * (1f - _augmentStats.DamageReduction);
-                    _player.TakeDamage(dmg);
                     var kbDir = _player.Position - enemy.Position;
-                    _player.ApplyKnockback(kbDir, 200f);
+                    TryDamagePlayer(enemy.Attack, kbDir, 200f);
                     _particles.EmitExplosion(enemy.Position, 25, Color.Cyan);
                     _particles.EmitImpactRing(enemy.Position, new Color(100, 220, 255), 35f);
                     enemy.TakeDamage(999);
@@ -447,8 +516,7 @@ public class GameplayScene : Scene
             // Damage player
             if (pouch.HasExploded && pouch.IsInCrossExplosion(_player.Position))
             {
-                float dmg = pouch.Damage * (1f - _augmentStats.DamageReduction);
-                _player.TakeDamage(dmg);
+                TryDamagePlayer(pouch.Damage);
                 FlashScreen(new Color(255, 100, 30), 0.1f);
                 _hitStopTimer = 0.05f;
             }
@@ -638,7 +706,26 @@ public class GameplayScene : Scene
             {
                 if (_inventory.TryAdd(item.MeteoriteId))
                 {
+                    // Track old synergy flags before recalculation
+                    bool wasFocus = _augmentStats.SynergyFocusResonance;
+                    bool wasBerserker = _augmentStats.SynergyBerserkerResonance;
+
                     _inventory.RecalculateStats(_augmentStats);
+
+                    // Check for newly activated synergies
+                    if (!wasFocus && _augmentStats.SynergyFocusResonance)
+                    {
+                        _synergyNotifications.Add(("[Synergy] Focus Resonance Activated!", 3f, new Color(200, 160, 255)));
+                        FlashScreen(new Color(200, 160, 255), 0.15f);
+                        _particles.EmitImpactRing(_player.Position, new Color(200, 160, 255), 60f, 20);
+                    }
+                    if (!wasBerserker && _augmentStats.SynergyBerserkerResonance)
+                    {
+                        _synergyNotifications.Add(("[Synergy] Berserker Resonance Activated!", 3f, new Color(255, 100, 100)));
+                        FlashScreen(new Color(255, 100, 100), 0.15f);
+                        _particles.EmitImpactRing(_player.Position, new Color(255, 100, 100), 60f, 20);
+                    }
+
                     _particles.EmitBurst(item.Position, 15, item.MainColor, 150f, 0.3f, 2f);
                     _particles.EmitImpactRing(item.Position, item.GlowColor, 30f, 12);
                     FlashScreen(item.MainColor, 0.1f);
@@ -652,8 +739,15 @@ public class GameplayScene : Scene
                 }
                 else
                 {
-                    // Inventory full - show message
-                    _itemPickupText = "인벤토리가 가득 찼습니다! (I키로 관리)";
+                    // Show appropriate message
+                    if (_inventory.Has(item.MeteoriteId) && !item.Info.Stackable)
+                    {
+                        _itemPickupText = "이미 보유 중인 운석입니다!";
+                    }
+                    else
+                    {
+                        _itemPickupText = "인벤토리가 가득 찼습니다! (I키로 관리)";
+                    }
                     _itemPickupTimer = 1.5f;
                     _itemPickupColor = new Color(255, 100, 100);
                 }
@@ -692,6 +786,25 @@ public class GameplayScene : Scene
                     lc * 0.6f, 1.5f + (float)Random.Shared.NextDouble() * 1f, 1.5f + (float)Random.Shared.NextDouble() * 1f);
             }
         }
+    }
+
+    private void TryDamagePlayer(float rawDmg, Vector2? knockbackDir = null, float knockbackForce = 0f)
+    {
+        if (_player.IsInvincible) return;
+
+        // Evasion check
+        if (_augmentStats.EvasionBonus > 0 && Random.Shared.NextDouble() < _augmentStats.EvasionBonus)
+        {
+            _damageNumbers.SpawnText(_player.Position, "MISS", new Color(180, 180, 180));
+            return;
+        }
+
+        // Apply defense (flat reduction)
+        float dmg = Math.Max(1, rawDmg - _augmentStats.Defense);
+        _player.TakeDamage(dmg);
+
+        if (knockbackDir.HasValue && knockbackForce > 0)
+            _player.ApplyKnockback(knockbackDir.Value, knockbackForce);
     }
 
     private void UpdateEnemyAI(Enemy enemy, float dt)
@@ -1259,7 +1372,7 @@ public class GameplayScene : Scene
             // Small AoE damage on landing
             if (Vector2.Distance(_player.Position, boss.Position) < 50f)
             {
-                _player.TakeDamage(boss.Attack * 0.5f * (1f - _augmentStats.DamageReduction));
+                TryDamagePlayer(boss.Attack * 0.5f);
             }
         }
     }
@@ -1302,9 +1415,9 @@ public class GameplayScene : Scene
         // Hit player directly
         if (Vector2.Distance(_player.Position, boss.Position) < 40f)
         {
-            _player.TakeDamage(boss.Attack * 1.3f * (1f - _augmentStats.DamageReduction));
             var knockDir = _player.Position - boss.Position;
             if (knockDir.LengthSquared() > 0) knockDir = Vector2.Normalize(knockDir);
+            TryDamagePlayer(boss.Attack * 1.3f, knockDir, 200f);
             _player.Position += knockDir * 60f;
             FlashScreen(new Color(255, 80, 40), 0.12f);
             _hitStopTimer = 0.06f;
@@ -1412,7 +1525,7 @@ public class GameplayScene : Scene
             // Ring damage
             if (Vector2.Distance(_player.Position, boss.Position) < radius)
             {
-                _player.TakeDamage(boss.Attack * 0.8f * (1f - _augmentStats.DamageReduction));
+                TryDamagePlayer(boss.Attack * 0.8f);
                 FlashScreen(new Color(180, 120, 40), 0.08f);
             }
 
@@ -1464,7 +1577,14 @@ public class GameplayScene : Scene
         {
             pullDir /= pullDist;
             _player.Position += pullDir * pullForce * dt;
-            _player.Position = _tileMap.ResolveCollision(_player.Position, 24, 24);
+            if (_player.IsSwordsman)
+            {
+                var feetPos2 = _player.Position + new Vector2(0, 24);
+                var resolved2 = _tileMap.ResolveCollision(feetPos2, 36, 38);
+                _player.Position = resolved2 - new Vector2(0, 24);
+            }
+            else
+                _player.Position = _tileMap.ResolveCollision(_player.Position, 24, 24);
         }
 
         // Visual: suction lines
@@ -1479,7 +1599,7 @@ public class GameplayScene : Scene
         // Damage if too close
         if (Vector2.Distance(_player.Position, boss.Position) < 45f && _gameTimer % 0.5f < dt)
         {
-            _player.TakeDamage(boss.Attack * 0.6f * (1f - _augmentStats.DamageReduction));
+            TryDamagePlayer(boss.Attack * 0.6f);
         }
 
         // Periodically emit shockwave rings
@@ -1674,9 +1794,8 @@ public class GameplayScene : Scene
             if (dist < radius)
             {
                 float falloff = 1f - (dist / radius) * 0.5f;
-                _player.TakeDamage(boss.Attack * 2f * falloff * (1f - _augmentStats.DamageReduction));
                 var kbDir = _player.Position - boss.Position;
-                _player.ApplyKnockback(kbDir, 400f);
+                TryDamagePlayer(boss.Attack * 2f * falloff, kbDir, 400f);
             }
 
             _hitStopTimer = 0.15f;
@@ -1761,9 +1880,8 @@ public class GameplayScene : Scene
             // Hit player
             if (Vector2.Distance(_player.Position, boss.Position) < 40f)
             {
-                _player.TakeDamage(boss.Attack * 1.2f * (1f - _augmentStats.DamageReduction));
                 var kbDir = _player.Position - boss.Position;
-                _player.ApplyKnockback(kbDir, 300f);
+                TryDamagePlayer(boss.Attack * 1.2f, kbDir, 300f);
                 _hitStopTimer = 0.05f;
             }
         }
@@ -1913,90 +2031,203 @@ public class GameplayScene : Scene
 
     private void ShootArrow()
     {
+        // Archer removed - swordsman only
+    }
+
+    private void SwordSlash()
+    {
         var mouseWorld = GetMouseWorldPosition();
         var aimDir = mouseWorld - _player.Position;
         if (aimDir.LengthSquared() > 0) aimDir.Normalize();
-
-        float baseDamage = _player.Attack * _augmentStats.AttackMultiplier;
-        float speed = _augmentStats.ArrowSpeed;
-        float size = 4f * _augmentStats.ArrowSize;
-        var color = _augmentStats.ArrowColor;
-
-        int totalArrows = 1 + _augmentStats.ExtraArrows;
         float aimAngle = MathF.Atan2(aimDir.Y, aimDir.X);
 
-        _particles.EmitDirectionalSpark(_player.Position + aimDir * 15f, aimDir, 5, color, 150f);
+        // Combo scaling: 약(1)=1x, 중(2)=1.3x, 강(3)=2x
+        int combo = Math.Clamp(_player.ComboStep, 1, 3);
+        float comboDmgMul = combo switch { 1 => 1f, 2 => 1.2f, _ => 1.5f };
+        float comboRangeMul = combo switch { 1 => 0.87f, 2 => 1f, _ => 1.27f };
+        float comboArcMul = combo switch { 1 => 0.8f, 2 => 1f, _ => 1.28f };
+        float comboKnockMul = combo switch { 1 => 0.8f, 2 => 1f, _ => 1.5f };
 
-        for (int i = 0; i < totalArrows; i++)
+        // DrawSlash (발도): after dash, x2 damage and x2 range
+        float drawSlashMul = 1f;
+        if (_drawSlashReady)
         {
-            float angleOffset = 0;
-            if (totalArrows > 1)
+            drawSlashMul = 2f;
+            _drawSlashReady = false;
+            _particles.EmitImpactRing(_player.Position, new Color(255, 220, 100), 50f, 16);
+            FlashScreen(new Color(255, 220, 100), 0.08f);
+        }
+
+        float baseDamage = (_player.Attack + _augmentStats.AttackBonus) * comboDmgMul * drawSlashMul;
+        // Berserker resonance
+        if (_augmentStats.SynergyBerserkerResonance && _player.HP < (_player.MaxHP + _augmentStats.MaxHPBonus) * 0.4f)
+            baseDamage *= 1.5f;
+
+        float range = _augmentStats.SwordRange * comboRangeMul * drawSlashMul;
+        float arc = _augmentStats.SwordArc * comboArcMul;
+        float knockback = _augmentStats.SwordKnockback * comboKnockMul;
+
+        // Slash particles (more on stronger hits)
+        int slashParticles = combo switch { 1 => 8, 2 => 12, _ => 20 };
+        for (int i = 0; i < slashParticles; i++)
+        {
+            float t = (float)i / slashParticles;
+            float angle = aimAngle - arc / 2f + arc * t;
+            float dist = range * (0.6f + 0.4f * t);
+            var pos = _player.Position + new Vector2(MathF.Cos(angle), MathF.Sin(angle)) * dist;
+            var vel = new Vector2(MathF.Cos(angle), MathF.Sin(angle)) * (40f + combo * 20f);
+            var slashColor = combo == 3 ? new Color(255, 240, 180) : new Color(255, 245, 220);
+            _particles.Emit(pos, vel, slashColor, 0.15f + 0.05f * t, 2f + combo);
+        }
+
+        // Damage enemies in arc (generous: matches visual crescent)
+        int hitCount = 0;
+        float enemyRadius = 15f; // approximate enemy body radius
+        foreach (var enemy in _enemies)
+        {
+            if (enemy.IsDead) continue;
+            var toEnemy = enemy.Position - _player.Position;
+            float dist = toEnemy.Length();
+            // Include enemies whose body overlaps the arc range
+            if (dist > range + enemyRadius) continue;
+
+            float enemyAngle = MathF.Atan2(toEnemy.Y, toEnemy.X);
+            float angleDiff = MathHelper.WrapAngle(enemyAngle - aimAngle);
+            // Add angular tolerance based on enemy size at distance
+            float angleMargin = dist > 1f ? MathF.Atan2(enemyRadius, dist) : 0.5f;
+            if (MathF.Abs(angleDiff) > arc / 2f + angleMargin) continue;
+
+            bool isCrit = Random.Shared.NextDouble() < (_player.CritRate + _augmentStats.CritRateBonus);
+            float dmg = baseDamage * (isCrit ? _augmentStats.CritDamageMultiplier : 1f);
+
+            enemy.TakeDamage(dmg);
+            enemy.ApplyKnockback(toEnemy, knockback);
+            hitCount++;
+
+            _damageNumbers.Spawn(enemy.Position, dmg, isCrit);
+            _particles.EmitBurst(enemy.Position, combo == 3 ? 15 : 6, new Color(255, 220, 150), 80f + combo * 30f, 0.2f, 2f + combo);
+
+            // Hit stop on crit or 3rd combo
+            if (isCrit || combo == 3)
+                _hitStopTimer = combo == 3 ? 0.06f : 0.04f;
+
+            // Life steal
+            float totalLifeSteal = _augmentStats.LifeSteal;
+            if (totalLifeSteal > 0)
+                _player.HP = Math.Min(_player.MaxHP + _augmentStats.MaxHPBonus, _player.HP + dmg * totalLifeSteal);
+
+            // ExplosiveFlame (폭발): fire explosion on hit
+            if (_augmentStats.ExplosiveFlame)
             {
-                float spreadHalf = _augmentStats.SpreadAngle * (totalArrows - 1) / 2f;
-                angleOffset = -spreadHalf + _augmentStats.SpreadAngle * i;
+                PerformExplosion(enemy.Position, dmg * 0.3f, 45f, new Color(255, 120, 40));
+                _particles.EmitBurst(enemy.Position, 8, new Color(255, 100, 30), 100f, 0.2f, 3f);
             }
 
-            float finalAngle = aimAngle + angleOffset;
-            var dir = new Vector2(MathF.Cos(finalAngle), MathF.Sin(finalAngle));
-
-            var proj = _projectiles.SpawnPlayerArrow(_player.Position + dir * 18f, dir, baseDamage, speed, size, color);
-
-            if (_augmentStats.PiercingArrows)
-                proj.PierceRemaining = _augmentStats.PierceCount;
-            if (_augmentStats.ExplosiveArrows)
+            // CritLightning (번개): chain lightning on crit
+            if (isCrit && _augmentStats.CritLightning)
             {
-                proj.Explosive = true;
-                proj.ExplosionRadius = _augmentStats.ExplosionRadius;
-                proj.ExplosionDamageRatio = _augmentStats.ExplosionDamage;
-            }
-            if (_augmentStats.HomingArrows)
-            {
-                proj.Homing = true;
-                proj.HomingStrength = _augmentStats.HomingStrength;
-            }
-            if (_augmentStats.BouncingArrows)
-                proj.BounceRemaining = _augmentStats.BounceCount;
-            if (_augmentStats.ChainLightning)
-            {
-                proj.ChainLightning = true;
-                proj.ChainDamage = _augmentStats.ChainDamage;
-                proj.ChainCount = _augmentStats.ChainCount;
-            }
-            if (_augmentStats.FlameArrows) proj.FlameTrail = true;
-            if (_augmentStats.FrostArrows)
-            {
-                proj.FrostEffect = true;
-                proj.FrostSlow = _augmentStats.FrostSlow;
+                PerformChainLightning(enemy, dmg * 0.5f, 3);
+                AudioManager.Play("lightning", 0.5f, 0.1f, 0.08f);
             }
         }
 
+        // 3rd combo: screen shake + impact zoom
+        if (combo == 3 && hitCount > 0)
+        {
+            _camera.Shake(5f, 0.15f);
+            _camera.ImpactZoom(0.03f);
+        }
+
+        // CrescentWave (초승): 3rd hit fires a crescent projectile
+        if (combo == 3 && _augmentStats.CrescentWave && hitCount > 0)
+        {
+            var proj = _projectiles.SpawnPlayerArrow(
+                _player.Position + aimDir * 25f, aimDir,
+                baseDamage * 0.8f, 300f, 8f, new Color(220, 240, 255));
+            proj.PierceRemaining = 5;
+            proj.Life = 0.8f;
+            _particles.EmitDirectionalSpark(_player.Position + aimDir * 20f, aimDir, 10, new Color(200, 230, 255), 200f);
+        }
+
+        // GroundCrack (균열): 3rd hit creates delayed explosion
+        if (combo == 3 && _augmentStats.GroundCrack && hitCount > 0)
+        {
+            var crackPos = _player.Position + aimDir * range * 0.6f;
+            float crackDmg = baseDamage;
+            _groundCracks.Add((crackPos, crackDmg, 0.8f, 0.8f));
+            _particles.EmitBurst(crackPos, 6, new Color(180, 120, 80), 40f, 0.15f, 2f);
+        }
+
+        // WindBurst (바람): 3rd hit activates 5s attack speed buff
+        if (combo == 3 && _augmentStats.WindBurst && hitCount > 0)
+        {
+            float windDuration = 5f;
+            if (_augmentStats.SynergyBerserkerResonance && _player.HP < (_player.MaxHP + _augmentStats.MaxHPBonus) * 0.4f)
+                windDuration *= 1.5f;
+            _windBurstActiveTimer = windDuration;
+            _particles.EmitImpactRing(_player.Position, new Color(150, 230, 200), 40f, 12);
+        }
+
+        // AfterImage (잔영): schedule ghost slash 0.2s later
+        if (_augmentStats.AfterImage && hitCount > 0)
+        {
+            float afterDmg = baseDamage;
+            if (_augmentStats.SynergyFocusResonance) afterDmg *= 2f;
+            _afterImageSlashes.Add((_player.Position, aimAngle, afterDmg, range, arc, knockback, 0.2f));
+            _particles.EmitBurst(_player.Position, 4, new Color(180, 150, 255) * 0.5f, 40f, 0.15f, 2f);
+        }
+
+        // Combo counter
+        if (hitCount > 0)
+        {
+            _comboCount += hitCount;
+            _comboTimer = 1.5f;
+        }
+    }
+
+    private void PerformGhostSlash(Vector2 pos, float aimAngle, float damage, float range, float arc, float knockback)
+    {
+        // Visual: ghost arc
+        for (int i = 0; i < 16; i++)
+        {
+            float t = (float)i / 16;
+            float angle = aimAngle - arc / 2f + arc * t;
+            float dist = range * (0.5f + 0.5f * t);
+            var p = pos + new Vector2(MathF.Cos(angle), MathF.Sin(angle)) * dist;
+            _particles.Emit(p, new Vector2(MathF.Cos(angle), MathF.Sin(angle)) * 30f,
+                new Color(180, 150, 255) * 0.6f, 0.2f, 3f);
+        }
+        _particles.EmitImpactRing(pos, new Color(180, 150, 255) * 0.4f, range * 0.7f, 12);
+
+        // Damage enemies
+        float enemyRadius = 15f;
+        foreach (var enemy in _enemies)
+        {
+            if (enemy.IsDead) continue;
+            var toEnemy = enemy.Position - pos;
+            float dist2 = toEnemy.Length();
+            if (dist2 > range + enemyRadius) continue;
+
+            float enemyAngle = MathF.Atan2(toEnemy.Y, toEnemy.X);
+            float angleDiff = MathHelper.WrapAngle(enemyAngle - aimAngle);
+            float angleMargin = dist2 > 1f ? MathF.Atan2(enemyRadius, dist2) : 0.5f;
+            if (MathF.Abs(angleDiff) > arc / 2f + angleMargin) continue;
+
+            bool isCrit = Random.Shared.NextDouble() < (_player.CritRate + _augmentStats.CritRateBonus);
+            float dmg = damage * (isCrit ? _augmentStats.CritDamageMultiplier : 1f);
+
+            enemy.TakeDamage(dmg);
+            enemy.ApplyKnockback(toEnemy, knockback);
+            _damageNumbers.Spawn(enemy.Position, dmg, isCrit);
+            _particles.EmitBurst(enemy.Position, 6, new Color(180, 150, 255), 80f, 0.15f, 2f);
+        }
+
+        AudioManager.Play("arrow_shoot", 0.4f, -0.3f, 0.05f);
     }
 
     private void PerformArrowRain()
     {
-        var mouseWorld = GetMouseWorldPosition();
-        float baseDamage = _player.Attack * _augmentStats.AttackMultiplier * 0.5f;
-        float size = 3f * _augmentStats.ArrowSize;
-        var color = _augmentStats.ArrowColor;
-
-        for (int i = 0; i < 12; i++)
-        {
-            float ox = (float)(Random.Shared.NextDouble() * 80 - 40);
-            float oy = (float)(Random.Shared.NextDouble() * 80 - 40);
-            var pos = mouseWorld + new Vector2(ox, oy);
-            var proj = _projectiles.SpawnRainArrow(pos, baseDamage, color, size);
-            if (_augmentStats.ExplosiveArrows)
-            {
-                proj.Explosive = true;
-                proj.ExplosionRadius = _augmentStats.ExplosionRadius * 0.7f;
-                proj.ExplosionDamageRatio = _augmentStats.ExplosionDamage;
-            }
-        }
-
-        _particles.EmitImpactRing(mouseWorld, new Color(255, 200, 100) * 0.5f, 50f, 20);
-        FlashScreen(new Color(255, 220, 100), 0.06f);
-        AudioManager.Play("arrow_rain", 0.6f, 0.1f);
-        _camera.Shake(2f, 0.1f);
+        // Archer removed - swordsman only
     }
 
     private void HandleProjectileWallCollisions()
@@ -2151,10 +2382,8 @@ public class GameplayScene : Scene
             {
                 if (proj.Bounds.Intersects(_player.Bounds) && !_player.IsInvincible)
                 {
-                    float dmg = proj.Damage * (1f - _augmentStats.DamageReduction);
-                    _player.TakeDamage(dmg);
                     var hitDir = _player.Position - proj.Position;
-                    _player.ApplyKnockback(hitDir, 180f);
+                    TryDamagePlayer(proj.Damage, hitDir, 180f);
                     _particles.EmitBurst(_player.Position, 12, new Color(255, 150, 50), 200f);
                     _particles.EmitDirectionalSpark(_player.Position, hitDir, 8, new Color(255, 100, 40));
                     _hitStopTimer = 0.03f;
@@ -2350,7 +2579,8 @@ public class GameplayScene : Scene
 
         foreach (var entity in drawOrder)
         {
-            DrawShadow(spriteBatch, entity.Position, entity is Player ? 14 : 10);
+            if (entity is not Player)
+                DrawShadow(spriteBatch, entity.Position, 10);
             entity.Draw(spriteBatch);
         }
 
@@ -2385,6 +2615,42 @@ public class GameplayScene : Scene
         // Item pickup notification
         if (_itemPickupTimer > 0 && _itemPickupText != null)
             DrawItemPickupNotification(spriteBatch);
+
+        // Synergy notifications
+        for (int i = 0; i < _synergyNotifications.Count; i++)
+        {
+            var notif = _synergyNotifications[i];
+            float alpha = Math.Min(1f, notif.timer);
+            float slideUp = (1f - alpha) * 20f;
+            float scale = 1f;
+            string text = SanitizeForFont(Fonts.Game, notif.text);
+            var size = Fonts.Game.MeasureString(text);
+            var pos = new Vector2(Game1.ScreenWidth / 2f - size.X * scale / 2f, 130 + i * 35 - slideUp);
+
+            int boxW = (int)(size.X * scale) + 30;
+            int boxH = 34;
+            spriteBatch.Draw(_pixel, new Rectangle((int)pos.X - 15, (int)pos.Y - 6, boxW, boxH),
+                new Color(10, 8, 5) * alpha * 0.9f);
+            DrawRectOutline(spriteBatch, new Rectangle((int)pos.X - 15, (int)pos.Y - 6, boxW, boxH),
+                notif.color * alpha * 0.7f, 1);
+
+            spriteBatch.DrawString(Fonts.Game, text, pos + new Vector2(1, 1), new Color(0, 0, 0) * alpha * 0.8f,
+                0, Vector2.Zero, scale, SpriteEffects.None, 0);
+            spriteBatch.DrawString(Fonts.Game, text, pos, notif.color * alpha,
+                0, Vector2.Zero, scale, SpriteEffects.None, 0);
+        }
+
+        // WindBurst active indicator
+        if (_windBurstActiveTimer > 0)
+        {
+            string windText = SanitizeForFont(Fonts.Game, $"[Wind] {_windBurstActiveTimer:F1}s");
+            var windSize = Fonts.Game.MeasureString(windText);
+            var windPos = new Vector2(Game1.ScreenWidth / 2f - windSize.X * 0.8f / 2f, 60);
+            spriteBatch.DrawString(Fonts.Game, windText, windPos + new Vector2(1, 1), new Color(0, 0, 0) * 0.6f,
+                0, Vector2.Zero, 0.8f, SpriteEffects.None, 0);
+            spriteBatch.DrawString(Fonts.Game, windText, windPos, new Color(150, 230, 200),
+                0, Vector2.Zero, 0.8f, SpriteEffects.None, 0);
+        }
 
         if (_comboCount >= 2 && _comboTimer > 0)
             DrawCombo(spriteBatch);
@@ -2587,6 +2853,17 @@ public class GameplayScene : Scene
         DrawResourceBar(spriteBatch, m + 32, m + 20,
             _player.Ki, _player.MaxKi,
             new Color(50, 70, 180), new Color(70, 100, 220), new Color(12, 12, 40), 140, 10);
+
+        // Dash charges
+        int dashY = m + 36;
+        for (int i = 0; i < Player.MaxDashCharges; i++)
+        {
+            bool filled = i < _player.DashCharges;
+            var dashColor = filled ? new Color(200, 180, 120) : new Color(50, 45, 35);
+            spriteBatch.Draw(_pixel, new Rectangle(m + i * 14, dashY, 10, 10), dashColor);
+            DrawRectOutline(spriteBatch, new Rectangle(m + i * 14, dashY, 10, 10), new Color(100, 90, 70), 1);
+        }
+        spriteBatch.DrawString(Fonts.Game, "회피", new Vector2(m + Player.MaxDashCharges * 14 + 4, dashY - 1), new Color(150, 130, 100), 0, Vector2.Zero, 0.55f, SpriteEffects.None, 0);
 
         DrawFloorIndicator(spriteBatch);
         DrawKillCounter(spriteBatch);
@@ -2889,61 +3166,32 @@ public class GameplayScene : Scene
         {
             ("기본", "체력 (HP)", $"{_player.HP:F0} / {_player.MaxHP + s.MaxHPBonus:F0}", new Color(220, 80, 80)),
             ("기본", "기력 (Ki)", $"{_player.Ki:F0} / {_player.MaxKi:F0}", new Color(80, 100, 220)),
-            ("기본", "이동속도", $"{200f * s.SpeedMultiplier:F0}", new Color(180, 255, 200)),
+            ("기본", "이동속도", $"{200f:F0}", new Color(180, 255, 200)),
             ("", "", "", Color.Transparent), // separator
-            ("공격", "공격력", $"{_player.Attack * s.AttackMultiplier:F1}", new Color(255, 200, 120)),
-            ("공격", "공격력 배율", $"{s.AttackMultiplier:F2}x", new Color(220, 180, 140)),
+            ("공격", "공격력", $"{_player.Attack + s.AttackBonus:F1}", new Color(255, 200, 120)),
+            ("공격", "공격력 보너스", $"+{s.AttackBonus:F1}", new Color(220, 180, 140)),
             ("공격", "공격속도 배율", $"{s.FireRateMultiplier:F2}x", new Color(200, 240, 180)),
-            ("공격", "화살 속도", $"{s.ArrowSpeed:F0}", new Color(200, 220, 255)),
-            ("공격", "화살 크기", $"{s.ArrowSize:F2}x", new Color(200, 200, 180)),
-            ("공격", "추가 화살", $"{s.ExtraArrows}", new Color(180, 220, 255)),
-            ("공격", "산탄 각도", $"{s.SpreadAngle:F2}", new Color(200, 180, 255)),
+            ("공격", "검 사거리", $"{s.SwordRange:F0}", new Color(200, 220, 255)),
+            ("공격", "검 호 (Arc)", $"{s.SwordArc:F2}", new Color(200, 200, 180)),
+            ("공격", "넉백", $"{s.SwordKnockback:F0}", new Color(180, 220, 255)),
             ("공격", "치명타율", $"{(s.CritRateBonus + _player.CritRate) * 100:F1}%", new Color(255, 220, 80)),
             ("공격", "치명타 피해", $"{s.CritDamageMultiplier:F1}x", new Color(255, 200, 60)),
             ("", "", "", Color.Transparent),
-            ("방어", "피해 감소", $"{s.DamageReduction * 100:F1}%", new Color(160, 170, 200)),
+            ("방어", "방어력", $"{s.Defense:F1}", new Color(160, 170, 200)),
             ("방어", "최대 HP 보너스", $"+{s.MaxHPBonus:F0}", new Color(100, 255, 120)),
             ("방어", "생명력 흡수", $"{s.LifeSteal * 100:F1}%", new Color(255, 100, 100)),
             ("방어", "회피율", $"{s.EvasionBonus * 100:F1}%", new Color(200, 200, 230)),
-            ("방어", "명중률 보너스", $"+{s.AccuracyBonus * 100:F1}%", new Color(220, 220, 200)),
             ("", "", "", Color.Transparent),
-            ("특수효과", "관통", s.PiercingArrows ? $"O ({s.PierceCount}회)" : "X", s.PiercingArrows ? new Color(255, 220, 100) : new Color(120, 110, 90)),
-            ("특수효과", "폭발", s.ExplosiveArrows ? $"O (반경{s.ExplosionRadius:F0}, 피해{s.ExplosionDamage:F1})" : "X", s.ExplosiveArrows ? new Color(255, 130, 60) : new Color(120, 110, 90)),
-            ("특수효과", "유도", s.HomingArrows ? $"O (강도{s.HomingStrength:F1})" : "X", s.HomingArrows ? new Color(100, 255, 180) : new Color(120, 110, 90)),
-            ("특수효과", "반사", s.BouncingArrows ? $"O ({s.BounceCount}회)" : "X", s.BouncingArrows ? new Color(200, 255, 220) : new Color(120, 110, 90)),
-            ("특수효과", "연쇄 번개", s.ChainLightning ? $"O ({s.ChainCount}체, 피해{s.ChainDamage:F1})" : "X", s.ChainLightning ? new Color(160, 160, 255) : new Color(120, 110, 90)),
-            ("특수효과", "파편 수", $"{s.ShrapnelCount}", new Color(220, 180, 140)),
-            ("특수효과", "이중발사 확률", $"{s.EchoChance * 100:F0}%", new Color(200, 180, 255)),
+            ("특수효과", "잔상", s.AfterImage ? "O" : "X", s.AfterImage ? new Color(180, 180, 220) : new Color(120, 110, 90)),
+            ("특수효과", "초승달 파동", s.CrescentWave ? "O" : "X", s.CrescentWave ? new Color(255, 240, 180) : new Color(120, 110, 90)),
+            ("특수효과", "발도", s.DrawSlash ? "O" : "X", s.DrawSlash ? new Color(255, 220, 100) : new Color(120, 110, 90)),
+            ("특수효과", "지면 균열", s.GroundCrack ? "O" : "X", s.GroundCrack ? new Color(200, 160, 80) : new Color(120, 110, 90)),
+            ("특수효과", "폭염", s.ExplosiveFlame ? "O" : "X", s.ExplosiveFlame ? new Color(255, 130, 60) : new Color(120, 110, 90)),
+            ("특수효과", "치명 번개", s.CritLightning ? "O" : "X", s.CritLightning ? new Color(160, 160, 255) : new Color(120, 110, 90)),
+            ("특수효과", "바람 돌풍", s.WindBurst ? "O" : "X", s.WindBurst ? new Color(160, 220, 200) : new Color(120, 110, 90)),
             ("", "", "", Color.Transparent),
-            ("원소", "불화살", s.FlameArrows ? "O" : "X", s.FlameArrows ? new Color(255, 120, 30) : new Color(120, 110, 90)),
-            ("원소", "얼음 화살", s.FrostArrows ? $"O (감속{s.FrostSlow * 100:F0}%)" : "X", s.FrostArrows ? new Color(100, 200, 255) : new Color(120, 110, 90)),
-            ("원소", "화염 피해", $"{s.FireDamage:F0}", new Color(255, 130, 40)),
-            ("원소", "독 피해", $"{s.PoisonDamage:F0}", new Color(120, 255, 80)),
-            ("원소", "빙결 피해", $"{s.IceDamage:F0}", new Color(140, 220, 255)),
-            ("원소", "번개 피해", $"{s.LightningDamage:F0}", new Color(180, 160, 255)),
-            ("", "", "", Color.Transparent),
-            ("조건부", "이동 중 공격력", $"+{s.MovingAttackBonus * 100:F0}%", new Color(200, 240, 180)),
-            ("조건부", "정지 시 공격력", $"+{s.StillAttackBonus * 100:F0}%", new Color(240, 200, 180)),
-            ("조건부", "보스 추가 피해", $"+{s.BossDamageBonus * 100:F0}%", new Color(255, 200, 50)),
-            ("조건부", "아이템 드롭률", $"+{s.ItemDropBonus * 100:F0}%", new Color(255, 255, 100)),
-            ("", "", "", Color.Transparent),
-            ("스킬", "화살비", s.ArrowRain ? $"O ({s.ArrowRainCooldown:F0}초)" : "X", s.ArrowRain ? new Color(255, 230, 100) : new Color(120, 110, 90)),
-            ("스킬", "유령보 (무적 대시)", s.GhostStep ? "O" : "X", s.GhostStep ? new Color(180, 180, 220) : new Color(120, 110, 90)),
-            ("스킬", "뇌보 (번개 대시)", s.LightningDash ? $"O (피해{s.LightningDashDamage:F0})" : "X", s.LightningDash ? new Color(150, 130, 255) : new Color(120, 110, 90)),
-            ("스킬", "처치 시 버프", s.KillAttackBuff ? "O" : "X", s.KillAttackBuff ? new Color(255, 80, 80) : new Color(120, 110, 90)),
-            ("스킬", "유성 낙하", s.MeteorStrike ? "O" : "X", s.MeteorStrike ? new Color(255, 180, 60) : new Color(120, 110, 90)),
-            ("스킬", "회오리 적중", s.TornadoOnHit ? "O" : "X", s.TornadoOnHit ? new Color(160, 220, 180) : new Color(120, 110, 90)),
-            ("스킬", "그림자 화살", s.ShadowArrow ? "O" : "X", s.ShadowArrow ? new Color(100, 80, 120) : new Color(120, 110, 90)),
-            ("스킬", "환영 궁수", s.PhantomArcher ? "O" : "X", s.PhantomArcher ? new Color(180, 150, 255) : new Color(120, 110, 90)),
-            ("스킬", "시간 감속 (회피)", s.TimeSlowOnDodge ? "O" : "X", s.TimeSlowOnDodge ? new Color(200, 200, 255) : new Color(120, 110, 90)),
-            ("", "", "", Color.Transparent),
-            ("시너지", "유성회오리", s.MeteorTornado ? "O" : "X", s.MeteorTornado ? new Color(255, 200, 100) : new Color(120, 110, 90)),
-            ("시너지", "빙뢰", s.IceLightning ? "O" : "X", s.IceLightning ? new Color(140, 200, 255) : new Color(120, 110, 90)),
-            ("시너지", "독폭", s.PoisonExplosion ? "O" : "X", s.PoisonExplosion ? new Color(120, 200, 60) : new Color(120, 110, 90)),
-            ("시너지", "살의유성", s.KillMeteor ? "O" : "X", s.KillMeteor ? new Color(255, 120, 60) : new Color(120, 110, 90)),
-            ("시너지", "그림자폭발", s.ShadowExplosion ? "O" : "X", s.ShadowExplosion ? new Color(150, 80, 120) : new Color(120, 110, 90)),
-            ("시너지", "감속회오리", s.SlowTornado ? "O" : "X", s.SlowTornado ? new Color(100, 220, 255) : new Color(120, 110, 90)),
-            ("시너지", "하늘비", s.SkyArrows ? "O" : "X", s.SkyArrows ? new Color(200, 230, 255) : new Color(120, 110, 90)),
+            ("시너지", "집중 공명", s.SynergyFocusResonance ? "O" : "X", s.SynergyFocusResonance ? new Color(255, 200, 100) : new Color(120, 110, 90)),
+            ("시너지", "광전사 공명", s.SynergyBerserkerResonance ? "O" : "X", s.SynergyBerserkerResonance ? new Color(255, 80, 80) : new Color(120, 110, 90)),
         };
 
         int lineH = 20;
@@ -3061,7 +3309,7 @@ public class GameplayScene : Scene
                     if (_inventoryDestroyConfirm)
                     {
                         var (id, _) = items[_inventorySelectedSlot];
-                        _inventory.Remove(id);
+                        _inventory.RemoveAll(id);
                         _inventory.RecalculateStats(_augmentStats);
                         _inventoryDestroyConfirm = false;
                         if (_inventorySelectedSlot >= _inventory.GetSortedItems().Count)

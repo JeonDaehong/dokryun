@@ -41,6 +41,11 @@ public class ChungcheongVillageScene : Scene
         _camera = new Camera(GraphicsDevice.Viewport) { Zoom = 1.5f };
 
         _player = new Player();
+        if (Game1.SelectedClass == CharacterClass.Swordsman)
+        {
+            _player.IsSwordsman = true;
+            _player.LoadAnimations(Content.Load<Texture2D>("Sprites/Move"), Content.Load<Texture2D>("Sprites/Idle"), Content.Load<Texture2D>("Sprites/attack"));
+        }
         _player.Position = new Vector2(400, 480);
         _player.Speed = 150f;
     }
@@ -185,7 +190,6 @@ public class ChungcheongVillageScene : Scene
         // Player
         drawList.Add((_player.Position.Y, () =>
         {
-            DrawShadow(spriteBatch, _player.Position, 14);
             _player.Draw(spriteBatch);
         }));
 

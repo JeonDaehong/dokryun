@@ -50,6 +50,28 @@ public class DamageNumberSystem
         }
     }
 
+    public void SpawnText(Vector2 position, string text, Color color, float duration = 0.8f)
+    {
+        for (int i = 0; i < _numbers.Length; i++)
+        {
+            if (!_numbers[i].IsActive)
+            {
+                float offsetX = (float)(Random.Shared.NextDouble() * 20 - 10);
+                _numbers[i] = new DamageNumber
+                {
+                    Position = position + new Vector2(offsetX, -10),
+                    Text = text,
+                    Color = color,
+                    Life = duration,
+                    MaxLife = duration,
+                    IsCrit = false,
+                    IsActive = true
+                };
+                return;
+            }
+        }
+    }
+
     public void Update(float deltaTime)
     {
         for (int i = 0; i < _numbers.Length; i++)
@@ -122,10 +144,22 @@ public class DamageNumberSystem
         new bool[,] {{true,true,true},{true,false,true},{true,true,true},{false,false,true},{true,true,true}},
     };
 
+    private static readonly Dictionary<char, bool[,]> LetterPatterns = new()
+    {
+        ['M'] = new bool[,] {{true,false,true},{true,true,true},{true,true,true},{true,false,true},{true,false,true}},
+        ['I'] = new bool[,] {{true,true,true},{false,true,false},{false,true,false},{false,true,false},{true,true,true}},
+        ['S'] = new bool[,] {{true,true,true},{true,false,false},{true,true,true},{false,false,true},{true,true,true}},
+    };
+
     private static void DrawPixelDigit(SpriteBatch spriteBatch, char c, Vector2 pos, Color color, float scale)
     {
-        if (c < '0' || c > '9') return;
-        var pattern = DigitPatterns[c - '0'];
+        bool[,] pattern;
+        if (c >= '0' && c <= '9')
+            pattern = DigitPatterns[c - '0'];
+        else if (LetterPatterns.TryGetValue(c, out var lp))
+            pattern = lp;
+        else
+            return;
 
         for (int y = 0; y < 5; y++)
         for (int x = 0; x < 3; x++)

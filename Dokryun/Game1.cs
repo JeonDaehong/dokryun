@@ -5,6 +5,12 @@ using Dokryun.Scenes;
 
 namespace Dokryun;
 
+public enum CharacterClass
+{
+    Swordsman,  // 검사
+    Archer      // 궁수
+}
+
 public class Game1 : Game
 {
     private GraphicsDeviceManager _graphics;
@@ -13,6 +19,8 @@ public class Game1 : Game
 
     public const int ScreenWidth = 1280;
     public const int ScreenHeight = 720;
+
+    public static CharacterClass SelectedClass { get; set; } = CharacterClass.Archer;
 
     public Game1()
     {

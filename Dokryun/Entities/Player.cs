@@ -20,6 +20,19 @@ public class Player : Entity
     public bool IsDashing { get; private set; }
     public bool FacingLeft { get; private set; }
 
+    // Sprite animation
+    private SpriteAnimation _runAnim;
+    private SpriteAnimation _idleAnim;
+    private SpriteAnimation _attackAnim;
+    private bool _isMoving;
+
+    // Class
+    public bool IsSwordsman { get; set; }
+
+    // Attack lock (swordsman: can't move while attacking)
+    public bool IsAttacking { get; private set; }
+    private float _attackLockTimer;
+
     // Aim direction (toward mouse)
     public Vector2 AimDirection { get; set; }
     public float AimAngle => MathF.Atan2(AimDirection.Y, AimDirection.X);
@@ -31,12 +44,27 @@ public class Player : Entity
     // Hit flash
     private float _hitFlashTimer;
 
+    // Sword slash effect
+    private float _slashTimer;
+    private float _slashAngle;
+    private const float SlashDuration = 0.2f;
+
+    // Combo system (swordsman)
+    public int ComboStep { get; private set; } // 0=약, 1=중, 2=강
+    private float _comboWindowTimer; // time left to chain next hit
+    private const float ComboWindow = 0.5f;
+
     private readonly Timer _dashTimer = new(0.2f);
-    private readonly Timer _dashCooldown = new(0.5f);
     private readonly Timer _attackCooldown = new(0.35f);
     private readonly Timer _invincibleTimer = new(0f);
     private Vector2 _dashDirection;
     private const float DashSpeed = 500f;
+
+    // Dash charges (max 3, recharge 5s each)
+    public int DashCharges { get; private set; } = 3;
+    public const int MaxDashCharges = 3;
+    public const float DashRechargeTime = 5f;
+    private float _dashRechargeTimer;
 
     // Knockback
     private Vector2 _knockbackVel;
@@ -45,8 +73,29 @@ public class Player : Entity
     public Player()
     {
         _dashTimer.Reset(0f);
-        _dashCooldown.Reset(0f);
         _attackCooldown.Reset(0f);
+    }
+
+    public void LoadAnimations(Texture2D moveSheet, Texture2D idleSheet = null, Texture2D attackSheet = null)
+    {
+        // Auto-detect frame size from sheet (5 frames)
+        int frameW = moveSheet.Width / 5;
+        int frameH = moveSheet.Height;
+        _runAnim = new SpriteAnimation(moveSheet, frameW, frameH, 0, 5, 0.1f);
+
+        if (idleSheet != null)
+        {
+            int idleFrameW = idleSheet.Width / 5;
+            int idleFrameH = idleSheet.Height;
+            _idleAnim = new SpriteAnimation(idleSheet, idleFrameW, idleFrameH, 0, 5, 0.15f);
+        }
+
+        if (attackSheet != null)
+        {
+            int atkFrameW = attackSheet.Width / 5;
+            int atkFrameH = attackSheet.Height;
+            _attackAnim = new SpriteAnimation(attackSheet, atkFrameW, atkFrameH, 0, 5, 0.025f) { IsLooping = false };
+        }
     }
 
     public override void Update(GameTime gameTime)
@@ -55,9 +104,43 @@ public class Player : Entity
         float dt = (float)gameTime.ElapsedGameTime.TotalSeconds;
 
         _dashTimer.Update(dt);
-        _dashCooldown.Update(dt);
         _attackCooldown.Update(dt);
         _invincibleTimer.Update(dt);
+
+        // Dash charge recharge
+        if (DashCharges < MaxDashCharges)
+        {
+            _dashRechargeTimer += dt;
+            if (_dashRechargeTimer >= DashRechargeTime)
+            {
+                DashCharges++;
+                _dashRechargeTimer -= DashRechargeTime;
+            }
+        }
+
+        // Attack lock timer
+        if (_attackLockTimer > 0)
+        {
+            _attackLockTimer -= dt;
+            if (_attackLockTimer <= 0) IsAttacking = false;
+        }
+
+        // Attack animation + slash effect
+        if (IsAttacking && _attackAnim != null)
+            _attackAnim.Update(dt);
+        if (_slashTimer > 0)
+            _slashTimer -= dt;
+
+        // Combo window expires → reset
+        if (_comboWindowTimer > 0)
+        {
+            _comboWindowTimer -= dt;
+            if (_comboWindowTimer <= 0)
+                ComboStep = 0;
+        }
+        // After 3rd hit (강), force reset after attack ends
+        if (ComboStep >= 3 && !IsAttacking)
+            ComboStep = 0;
 
         Ki = Math.Min(Ki + KiRegen * dt, MaxKi);
 
@@ -79,22 +162,58 @@ public class Player : Entity
             else
                 Velocity = _dashDirection * DashSpeed;
         }
+        else if (IsAttacking)
+        {
+            // Can't move while attacking
+            Velocity = Vector2.Zero;
+        }
         else
         {
             var moveDir = InputManager.GetMovementDirection();
             Velocity = moveDir * Speed;
 
-            if (AimDirection.X < 0) FacingLeft = true;
-            else if (AimDirection.X > 0) FacingLeft = false;
+            if (IsSwordsman)
+            {
+                // Swordsman: face movement direction
+                if (moveDir.X < 0) FacingLeft = true;
+                else if (moveDir.X > 0) FacingLeft = false;
+            }
+            else
+            {
+                // Archer: face aim (mouse) direction
+                if (AimDirection.X < 0) FacingLeft = true;
+                else if (AimDirection.X > 0) FacingLeft = false;
+            }
 
-            if (InputManager.IsKeyPressed(Microsoft.Xna.Framework.Input.Keys.Space) && _dashCooldown.IsFinished && moveDir != Vector2.Zero)
+            if (InputManager.IsKeyPressed(Microsoft.Xna.Framework.Input.Keys.Space) && DashCharges > 0 && moveDir != Vector2.Zero)
             {
                 StartDash(moveDir);
             }
         }
 
         Position += Velocity * dt;
-        UpdateBounds(24, 24);
+        if (IsSwordsman)
+        {
+            // Hitbox on lower body portion of sprite (offset down)
+            Bounds = new Rectangle(
+                (int)(Position.X - 18), (int)(Position.Y + 5),
+                36, 38);
+        }
+        else
+            UpdateBounds(24, 24);
+
+        // Animation update
+        _isMoving = Velocity.LengthSquared() > 100f;
+        if (_isMoving)
+        {
+            _runAnim?.Update(dt);
+            _idleAnim?.Reset();
+        }
+        else
+        {
+            _idleAnim?.Update(dt);
+            _runAnim?.Reset();
+        }
     }
 
     private void StartDash(Vector2 direction)
@@ -102,11 +221,13 @@ public class Player : Entity
         IsDashing = true;
         _dashDirection = direction;
         _dashTimer.Reset(0.2f);
-        _dashCooldown.Reset(0.5f);
         _invincibleTimer.Reset(0.2f);
+        DashCharges--;
+        if (DashCharges < MaxDashCharges && _dashRechargeTimer <= 0)
+            _dashRechargeTimer = 0f; // start recharging immediately
     }
 
-    public bool CanAttack() => _attackCooldown.IsFinished;
+    public bool CanAttack() => _attackCooldown.IsFinished && !IsAttacking;
 
     public void OnAttack(float fireRateMultiplier)
     {
@@ -114,6 +235,28 @@ public class Player : Entity
         _attackCooldown.Reset(cd);
         DrawTimer = 0.08f;
         _recoilTimer = 0.1f;
+
+        if (IsSwordsman)
+        {
+            IsAttacking = true;
+
+            // Combo: lock duration and slash scale per step
+            float lockTime = ComboStep switch { 0 => 0.2f, 1 => 0.25f, _ => 0.35f };
+            _attackLockTimer = lockTime;
+
+            // Face attack direction (toward mouse)
+            if (AimDirection.X < 0) FacingLeft = true;
+            else if (AimDirection.X > 0) FacingLeft = false;
+
+            // Start attack animation + slash effect
+            _attackAnim?.Reset();
+            _slashTimer = SlashDuration;
+            _slashAngle = AimAngle;
+
+            // Advance combo, then open window for next
+            ComboStep = Math.Min(ComboStep + 1, 3); // 1,2,3 during attack
+            _comboWindowTimer = ComboWindow + lockTime; // window starts after lock ends
+        }
     }
 
     public bool IsInvincible => !_invincibleTimer.IsFinished;
@@ -155,36 +298,112 @@ public class Player : Entity
         var recoilVec = AimDirection.LengthSquared() > 0 ? Vector2.Normalize(AimDirection) * recoilOffset : Vector2.Zero;
         var drawPos = Position + recoilVec;
 
-        // Body
-        var bodyRect = new Rectangle((int)drawPos.X - 10, (int)drawPos.Y - 14, 20, 28);
-        DrawRect(spriteBatch, bodyRect, color);
-
-        // Head
-        var headRect = new Rectangle((int)drawPos.X - 7, (int)drawPos.Y - 16, 14, 8);
-        DrawRect(spriteBatch, headRect, new Color(200, 190, 170) * (color.A / 255f));
-
-        // Bow
-        float aimAngle = AimAngle;
-        float bowDist = 12f;
-        var bowPos = drawPos + new Vector2(MathF.Cos(aimAngle), MathF.Sin(aimAngle)) * bowDist;
-
-        // Bow arc (3 segments)
-        var perpendicular = new Vector2(-MathF.Sin(aimAngle), MathF.Cos(aimAngle));
-        var bowTop = bowPos + perpendicular * 7f;
-        var bowBot = bowPos - perpendicular * 7f;
-        var bowColor = new Color(140, 100, 50);
-        DrawRect(spriteBatch, new Rectangle((int)bowTop.X - 1, (int)bowTop.Y - 1, 3, 3), bowColor);
-        DrawRect(spriteBatch, new Rectangle((int)bowPos.X - 1, (int)bowPos.Y - 1, 2, 2), bowColor);
-        DrawRect(spriteBatch, new Rectangle((int)bowBot.X - 1, (int)bowBot.Y - 1, 3, 3), bowColor);
-
-        // String
-        DrawRect(spriteBatch, new Rectangle((int)bowTop.X, (int)bowTop.Y, 1, (int)(bowBot.Y - bowTop.Y)), new Color(180, 170, 150) * 0.6f);
-
-        // Arrow nocked (when drawing)
-        if (DrawTimer > 0)
+        if (_runAnim != null)
         {
-            var arrowTip = bowPos + new Vector2(MathF.Cos(aimAngle), MathF.Sin(aimAngle)) * 10f;
-            DrawRect(spriteBatch, new Rectangle((int)arrowTip.X - 1, (int)arrowTip.Y - 1, 3, 3), new Color(255, 240, 180));
+            SpriteAnimation anim;
+            if (IsAttacking && _attackAnim != null)
+                anim = _attackAnim;
+            else if (_isMoving || _idleAnim == null)
+                anim = _runAnim;
+            else
+                anim = _idleAnim;
+
+            float spriteScale = 96f / anim.FrameHeight;
+            anim.Draw(spriteBatch, drawPos, FacingLeft, color, spriteScale);
+        }
+        else
+        {
+            // Fallback: placeholder rectangles
+            var bodyRect = new Rectangle((int)drawPos.X - 10, (int)drawPos.Y - 14, 20, 28);
+            DrawRect(spriteBatch, bodyRect, color);
+
+            var headRect = new Rectangle((int)drawPos.X - 7, (int)drawPos.Y - 16, 14, 8);
+            DrawRect(spriteBatch, headRect, new Color(200, 190, 170) * (color.A / 255f));
+        }
+
+        // Sword slash - combo-dependent crescent arc
+        if (IsSwordsman && _slashTimer > 0)
+        {
+            float progress = 1f - (_slashTimer / SlashDuration);
+            float alpha = progress < 0.3f ? 1f : 1f - (progress - 0.3f) / 0.7f;
+            alpha = MathF.Max(0, alpha);
+
+            // Combo visuals: 약(1) → 중(2) → 강(3)
+            int combo = Math.Clamp(ComboStep, 1, 3);
+            float arcSpan = combo switch { 1 => 2.0f, 2 => 2.5f, _ => 3.2f };
+            float outerRadius = combo switch { 1 => 65f, 2 => 75f, _ => 95f };
+            float thickness = combo switch { 1 => 20f, 2 => 28f, _ => 38f };
+            float sweepSpeed = combo switch { 1 => 3f, 2 => 3f, _ => 2.5f };
+            Color slashTint = combo switch { 1 => Color.White, 2 => new Color(220, 230, 255), _ => new Color(255, 240, 180) };
+
+            float sweepProgress = MathF.Min(1f, progress * sweepSpeed);
+            // 강(3): sweep direction reversed for variety
+            bool reverseSweep = combo == 2;
+
+            int segments = 32;
+            for (int i = 0; i <= (int)(segments * sweepProgress); i++)
+            {
+                float t = (float)i / segments;
+                float angle;
+                if (reverseSweep)
+                    angle = _slashAngle + arcSpan / 2f - arcSpan * t;
+                else
+                    angle = _slashAngle - arcSpan / 2f + arcSpan * t;
+
+                float crescentT = MathF.Sin(t * MathF.PI);
+                float currentThickness = thickness * crescentT;
+                if (currentThickness < 2f) currentThickness = 2f;
+
+                float outerR = outerRadius;
+                float innerR = outerRadius - currentThickness;
+
+                int layers = (int)(currentThickness / 2f) + 1;
+                for (int layer = 0; layer < layers; layer++)
+                {
+                    float lt = (float)layer / Math.Max(1, layers - 1);
+                    float r = innerR + (outerR - innerR) * lt;
+                    float px = drawPos.X + MathF.Cos(angle) * r;
+                    float py = drawPos.Y + MathF.Sin(angle) * r;
+
+                    float size = 4f + 2f * crescentT;
+                    if (combo == 3) size += 2f; // extra thick for 강
+                    DrawRect(spriteBatch, new Rectangle((int)(px - size / 2), (int)(py - size / 2), (int)size + 1, (int)size + 1), slashTint * alpha);
+                }
+
+                // Outer glow
+                float gx = drawPos.X + MathF.Cos(angle) * (outerR + 3f);
+                float gy = drawPos.Y + MathF.Sin(angle) * (outerR + 3f);
+                float glowSize = (combo == 3 ? 5f : 3f) * crescentT * alpha;
+                if (glowSize > 0.5f)
+                {
+                    var glowColor = combo == 3 ? new Color(255, 220, 120) : new Color(200, 220, 255);
+                    DrawRect(spriteBatch, new Rectangle((int)(gx - glowSize / 2), (int)(gy - glowSize / 2), (int)glowSize + 1, (int)glowSize + 1), glowColor * (alpha * 0.6f));
+                }
+            }
+        }
+
+        if (!IsSwordsman)
+        {
+            // Bow (archer only)
+            float aimAngle = AimAngle;
+            float bowDist = 12f;
+            var bowPos = drawPos + new Vector2(MathF.Cos(aimAngle), MathF.Sin(aimAngle)) * bowDist;
+
+            var perpendicular = new Vector2(-MathF.Sin(aimAngle), MathF.Cos(aimAngle));
+            var bowTop = bowPos + perpendicular * 7f;
+            var bowBot = bowPos - perpendicular * 7f;
+            var bowColor = new Color(140, 100, 50);
+            DrawRect(spriteBatch, new Rectangle((int)bowTop.X - 1, (int)bowTop.Y - 1, 3, 3), bowColor);
+            DrawRect(spriteBatch, new Rectangle((int)bowPos.X - 1, (int)bowPos.Y - 1, 2, 2), bowColor);
+            DrawRect(spriteBatch, new Rectangle((int)bowBot.X - 1, (int)bowBot.Y - 1, 3, 3), bowColor);
+
+            DrawRect(spriteBatch, new Rectangle((int)bowTop.X, (int)bowTop.Y, 1, (int)(bowBot.Y - bowTop.Y)), new Color(180, 170, 150) * 0.6f);
+
+            if (DrawTimer > 0)
+            {
+                var arrowTip = bowPos + new Vector2(MathF.Cos(aimAngle), MathF.Sin(aimAngle)) * 10f;
+                DrawRect(spriteBatch, new Rectangle((int)arrowTip.X - 1, (int)arrowTip.Y - 1, 3, 3), new Color(255, 240, 180));
+            }
         }
     }
 

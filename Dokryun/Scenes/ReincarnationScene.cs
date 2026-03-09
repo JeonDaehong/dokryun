@@ -12,6 +12,7 @@ public class ReincarnationScene : Scene
     private ParticleSystem _particles;
     private bool _selected;
     private float _selectTimer;
+    private int _selectedIndex = 1; // 0=검사, 1=궁수
 
     public override void Enter()
     {
@@ -47,12 +48,25 @@ public class ReincarnationScene : Scene
             return;
         }
 
-        // Only archer available - select with Enter/Space/Click (after 2s delay for UI to appear)
-        if (_timer > 2.5f && (InputManager.IsKeyPressed(Keys.Enter) || InputManager.IsKeyPressed(Keys.Space) || InputManager.IsLeftClick()))
+        // Class selection (after UI appears)
+        if (_timer > 2.5f)
         {
-            _selected = true;
-            _selectTimer = 0.5f;
-            _particles.EmitBurst(new Vector2(Game1.ScreenWidth / 2f, 400), 30, new Color(200, 170, 100), 200f, 0.5f, 2f);
+            if (InputManager.IsKeyPressed(Keys.Left) || InputManager.IsKeyPressed(Keys.A))
+                _selectedIndex = Math.Max(0, _selectedIndex - 1);
+            if (InputManager.IsKeyPressed(Keys.Right) || InputManager.IsKeyPressed(Keys.D))
+                _selectedIndex = Math.Min(1, _selectedIndex + 1);
+
+            if (InputManager.IsKeyPressed(Keys.Enter) || InputManager.IsKeyPressed(Keys.Space) || InputManager.IsLeftClick())
+            {
+                Game1.SelectedClass = _selectedIndex == 0 ? CharacterClass.Swordsman : CharacterClass.Archer;
+                _selected = true;
+                _selectTimer = 0.5f;
+
+                float cardX = _selectedIndex == 0
+                    ? Game1.ScreenWidth / 2f - 160f
+                    : Game1.ScreenWidth / 2f;
+                _particles.EmitBurst(new Vector2(cardX, 500), 30, new Color(200, 170, 100), 200f, 0.5f, 2f);
+            }
         }
     }
 
@@ -93,54 +107,30 @@ public class ReincarnationScene : Scene
             float alpha = MathF.Min(1f, (_timer - 2f) * 2f);
             DrawCenteredText(spriteBatch, "직업을 선택하시오", 380, new Color(180, 150, 110) * alpha);
 
-            // Archer card
             int cardW = 140;
             int cardH = 180;
-            int cx = Game1.ScreenWidth / 2 - cardW / 2;
             int cy = 410;
+            int gap = 20;
 
-            var borderColor = new Color(200, 170, 100) * alpha;
-            var bgColor = new Color(25, 20, 15) * alpha;
+            // Card positions: Swordsman(left), Archer(center), Locked(right)
+            int[] cardX = {
+                Game1.ScreenWidth / 2 - cardW - gap / 2 - cardW / 2,  // 검사
+                Game1.ScreenWidth / 2 - cardW / 2,                     // 궁수
+                Game1.ScreenWidth / 2 + cardW / 2 + gap                // 잠금
+            };
 
-            // Card background
-            spriteBatch.Draw(_pixel, new Rectangle(cx, cy, cardW, cardH), bgColor);
-            DrawRectOutline(spriteBatch, new Rectangle(cx, cy, cardW, cardH), borderColor, 2);
+            // --- Swordsman card (index 0) ---
+            DrawClassCard(spriteBatch, cardX[0], cy, cardW, cardH, alpha, _selectedIndex == 0,
+                "검사", "검을 다루는 자", DrawSwordIcon);
 
-            // Highlight pulse
-            float pulse = MathF.Sin(_timer * 3f) * 0.1f + 0.15f;
-            spriteBatch.Draw(_pixel, new Rectangle(cx, cy, cardW, cardH), borderColor * pulse);
+            // --- Archer card (index 1) ---
+            DrawClassCard(spriteBatch, cardX[1], cy, cardW, cardH, alpha, _selectedIndex == 1,
+                "궁수", "활을 다루는 자", DrawBowIcon);
 
-            // Archer icon (bow shape)
-            int iconX = Game1.ScreenWidth / 2;
-            int iconY = cy + 50;
-            // Bow
-            spriteBatch.Draw(_pixel, new Rectangle(iconX - 1, iconY - 18, 2, 36), borderColor);
-            spriteBatch.Draw(_pixel, new Rectangle(iconX - 8, iconY - 14, 8, 2), borderColor);
-            spriteBatch.Draw(_pixel, new Rectangle(iconX - 8, iconY + 12, 8, 2), borderColor);
-            // Arrow
-            spriteBatch.Draw(_pixel, new Rectangle(iconX - 15, iconY - 1, 20, 2), new Color(255, 230, 150) * alpha);
-            // Arrowhead
-            spriteBatch.Draw(_pixel, new Rectangle(iconX + 4, iconY - 3, 2, 2), new Color(255, 230, 150) * alpha);
-            spriteBatch.Draw(_pixel, new Rectangle(iconX + 4, iconY + 1, 2, 2), new Color(255, 230, 150) * alpha);
-
-            // Name
-            string name = "궁수";
-            var nameSize = Fonts.Game.MeasureString(name);
-            spriteBatch.DrawString(Fonts.Game, name,
-                new Vector2(Game1.ScreenWidth / 2f - nameSize.X * 0.9f / 2f, cy + 100),
-                borderColor, 0, Vector2.Zero, 0.9f, SpriteEffects.None, 0);
-
-            // Description
-            DrawCenteredText(spriteBatch, "활을 다루는 자", cy + 130, new Color(140, 120, 90) * alpha, 0.6f);
-
-            // Other class slots (locked)
-            int[] otherX = { cx - cardW - 20, cx + cardW + 20 };
-            foreach (int ox in otherX)
-            {
-                spriteBatch.Draw(_pixel, new Rectangle(ox, cy, cardW, cardH), new Color(15, 12, 10) * alpha);
-                DrawRectOutline(spriteBatch, new Rectangle(ox, cy, cardW, cardH), new Color(60, 50, 40) * alpha, 1);
-                DrawCenteredTextAt(spriteBatch, "?", ox + cardW / 2, cy + cardH / 2 - 10, new Color(60, 50, 40) * alpha);
-            }
+            // --- Locked slot (right) ---
+            spriteBatch.Draw(_pixel, new Rectangle(cardX[2], cy, cardW, cardH), new Color(15, 12, 10) * alpha);
+            DrawRectOutline(spriteBatch, new Rectangle(cardX[2], cy, cardW, cardH), new Color(60, 50, 40) * alpha, 1);
+            DrawCenteredTextAt(spriteBatch, "?", cardX[2] + cardW / 2, cy + cardH / 2 - 10, new Color(60, 50, 40) * alpha);
 
             // Prompt
             if (_timer > 3f)
@@ -168,6 +158,62 @@ public class ReincarnationScene : Scene
         var size = Fonts.Title.MeasureString(text);
         spriteBatch.DrawString(Fonts.Title, text,
             new Vector2(cx - size.X / 2f, cy - size.Y / 2f), color);
+    }
+
+    private void DrawClassCard(SpriteBatch spriteBatch, int cx, int cy, int cardW, int cardH,
+        float alpha, bool isSelected, string name, string desc, Action<SpriteBatch, int, int, Color> drawIcon)
+    {
+        var borderColor = isSelected ? new Color(200, 170, 100) * alpha : new Color(120, 100, 70) * alpha;
+        var bgColor = new Color(25, 20, 15) * alpha;
+
+        spriteBatch.Draw(_pixel, new Rectangle(cx, cy, cardW, cardH), bgColor);
+        DrawRectOutline(spriteBatch, new Rectangle(cx, cy, cardW, cardH), borderColor, isSelected ? 2 : 1);
+
+        if (isSelected)
+        {
+            float pulse = MathF.Sin(_timer * 3f) * 0.1f + 0.15f;
+            spriteBatch.Draw(_pixel, new Rectangle(cx, cy, cardW, cardH), borderColor * pulse);
+        }
+
+        // Icon
+        drawIcon(spriteBatch, cx + cardW / 2, cy + 50, borderColor);
+
+        // Name
+        var nameSize = Fonts.Game.MeasureString(name);
+        spriteBatch.DrawString(Fonts.Game, name,
+            new Vector2(cx + cardW / 2f - nameSize.X * 0.9f / 2f, cy + 100),
+            borderColor, 0, Vector2.Zero, 0.9f, SpriteEffects.None, 0);
+
+        // Description
+        var descSize = Fonts.Game.MeasureString(desc);
+        spriteBatch.DrawString(Fonts.Game, desc,
+            new Vector2(cx + cardW / 2f - descSize.X * 0.6f / 2f, cy + 130),
+            new Color(140, 120, 90) * alpha, 0, Vector2.Zero, 0.6f, SpriteEffects.None, 0);
+    }
+
+    private void DrawSwordIcon(SpriteBatch spriteBatch, int cx, int cy, Color color)
+    {
+        // Blade
+        spriteBatch.Draw(_pixel, new Rectangle(cx - 1, cy - 20, 3, 28), color);
+        // Guard
+        spriteBatch.Draw(_pixel, new Rectangle(cx - 7, cy + 6, 15, 3), color);
+        // Grip
+        spriteBatch.Draw(_pixel, new Rectangle(cx - 1, cy + 9, 3, 10), new Color(140, 100, 50));
+        // Tip
+        spriteBatch.Draw(_pixel, new Rectangle(cx, cy - 22, 1, 3), new Color(255, 240, 200));
+    }
+
+    private void DrawBowIcon(SpriteBatch spriteBatch, int cx, int cy, Color color)
+    {
+        // Bow
+        spriteBatch.Draw(_pixel, new Rectangle(cx - 1, cy - 18, 2, 36), color);
+        spriteBatch.Draw(_pixel, new Rectangle(cx - 8, cy - 14, 8, 2), color);
+        spriteBatch.Draw(_pixel, new Rectangle(cx - 8, cy + 12, 8, 2), color);
+        // Arrow
+        var arrowColor = new Color(255, 230, 150);
+        spriteBatch.Draw(_pixel, new Rectangle(cx - 15, cy - 1, 20, 2), arrowColor);
+        spriteBatch.Draw(_pixel, new Rectangle(cx + 4, cy - 3, 2, 2), arrowColor);
+        spriteBatch.Draw(_pixel, new Rectangle(cx + 4, cy + 1, 2, 2), arrowColor);
     }
 
     private void DrawReincarnationSymbol(SpriteBatch spriteBatch, Vector2 center, float alpha)
