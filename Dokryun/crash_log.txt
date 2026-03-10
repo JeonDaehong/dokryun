@@ -1,0 +1,10 @@
+[DRAW] 2026-03-10 오후 8:57:33
+Scene: DeathScene
+System.ArgumentException: Text contains characters that cannot be resolved by this SpriteFont. (Parameter 'text')
+   at Microsoft.Xna.Framework.Graphics.SpriteFont.GetGlyphIndexOrDefault(Char c)
+   at Microsoft.Xna.Framework.Graphics.SpriteFont.MeasureString(CharacterSource& text, Vector2& size)
+   at Microsoft.Xna.Framework.Graphics.SpriteFont.MeasureString(String text)
+   at Dokryun.Scenes.DeathScene.DrawCenteredText(SpriteBatch spriteBatch, SpriteFont font, String text, Int32 y, Color color) in D:\Dokryun\Dokryun\Scenes\DeathScene.cs:line 144
+   at Dokryun.Scenes.DeathScene.Draw(SpriteBatch spriteBatch) in D:\Dokryun\Dokryun\Scenes\DeathScene.cs:line 124
+   at Dokryun.Engine.SceneManager.Draw(SpriteBatch spriteBatch) in D:\Dokryun\Dokryun\Engine\SceneManager.cs:line 62
+   at Dokryun.Game1.Draw(GameTime gameTime) in D:\Dokryun\Dokryun\Game1.cs:line 84

@@ -13,6 +13,7 @@ public enum MeteoriteId
     SlaughterFragment,  // 학살의 운석 파편 - 치명타 데미지 +5%
     GiantFragment,      // 거인의 운석 파편 - 최대체력 +50
     GuardFragment,      // 수호의 운석 파편 - 방어력 +5
+    KiFragment,         // 기력의 운석 파편 - 최대 기력 +15
 
     // === 고유 운석 (8개) ===
     AfterImageMeteor,   // 잔영의 운석
@@ -76,6 +77,10 @@ public static class MeteoriteDatabase
         [MeteoriteId.GuardFragment] = new(MeteoriteId.GuardFragment, "수호의 운석 파편", "방어력 +2",
             MeteoriteRarity.White, true, s => s.Defense += 2f,
             new Color(160, 180, 200), new Color(130, 150, 170)),
+
+        [MeteoriteId.KiFragment] = new(MeteoriteId.KiFragment, "기력의 운석 파편", "최대 기력 +15",
+            MeteoriteRarity.White, true, s => s.MaxKiBonus += 15f,
+            new Color(80, 120, 220), new Color(60, 90, 200)),
 
         // ===== 고유 운석 =====
         [MeteoriteId.AfterImageMeteor] = new(MeteoriteId.AfterImageMeteor, "잔영의 운석",

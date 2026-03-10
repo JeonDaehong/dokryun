@@ -8,9 +8,9 @@ public class Player : Entity
 {
     public float MaxHP { get; set; } = 100f;
     public float HP { get; set; } = 100f;
-    public float MaxKi { get; set; } = 50f;
-    public float Ki { get; set; } = 50f;
-    public float KiRegen { get; set; } = 1f;
+    public float MaxKi { get; set; } = 150f;
+    public float Ki { get; set; } = 150f;
+    public float KiRegen { get; set; } = 2f;
     public float Speed { get; set; } = 200f;
     public float Attack { get; set; } = 12f;
     public float CritRate { get; set; } = 0.05f;

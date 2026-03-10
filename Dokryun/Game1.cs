@@ -24,6 +24,15 @@ public class Game1 : Game
     public static CharacterClass SelectedClass { get; set; } = CharacterClass.Archer;
     public static MeteoriteId? InitialMeteoriteId { get; set; }
 
+    // Meta progression (persistent across runs)
+    public static MetaProgression Meta { get; set; } = MetaProgression.Load();
+
+    // Run results (passed from gameplay to death screen)
+    public static int LastFloor { get; set; }
+    public static int LastKills { get; set; }
+    public static bool LastBossDefeated { get; set; }
+    public static int LastGold { get; set; }
+
     public Game1()
     {
         _graphics = new GraphicsDeviceManager(this);
@@ -53,15 +62,33 @@ public class Game1 : Game
 
     protected override void Update(GameTime gameTime)
     {
-        InputManager.Update();
-        AudioManager.Update((float)gameTime.ElapsedGameTime.TotalSeconds);
-        _sceneManager.Update(gameTime);
+        try
+        {
+            InputManager.Update();
+            AudioManager.Update((float)gameTime.ElapsedGameTime.TotalSeconds);
+            _sceneManager.Update(gameTime);
+        }
+        catch (Exception ex)
+        {
+            System.IO.File.WriteAllText("crash_log.txt",
+                $"[UPDATE] {DateTime.Now}\nScene: {_sceneManager.CurrentScene?.GetType().Name}\n{ex}");
+            throw;
+        }
         base.Update(gameTime);
     }
 
     protected override void Draw(GameTime gameTime)
     {
-        _sceneManager.Draw(_spriteBatch);
+        try
+        {
+            _sceneManager.Draw(_spriteBatch);
+        }
+        catch (Exception ex)
+        {
+            System.IO.File.WriteAllText("crash_log.txt",
+                $"[DRAW] {DateTime.Now}\nScene: {_sceneManager.CurrentScene?.GetType().Name}\n{ex}");
+            throw;
+        }
         base.Draw(gameTime);
     }
 }

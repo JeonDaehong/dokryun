@@ -12,6 +12,7 @@ public class AugmentStats
     public float MaxHPBonus { get; set; } = 0f;            // 최대 체력 추가
     public float Defense { get; set; } = 0f;               // 방어력 (데미지 감소 절대값)
     public float EvasionBonus { get; set; } = 0f;          // 회피율
+    public float MaxKiBonus { get; set; } = 0f;            // 최대 기력 추가
 
     // 검사 전용 기본
     public float SwordRange { get; set; } = 75f;
@@ -60,6 +61,7 @@ public class AugmentStats
         MaxHPBonus = 0f;
         Defense = 0f;
         EvasionBonus = 0f;
+        MaxKiBonus = 0f;
 
         SwordRange = 75f;
         SwordArc = 2.5f;

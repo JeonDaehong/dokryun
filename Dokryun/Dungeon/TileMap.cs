@@ -32,15 +32,36 @@ public class TileMap
 
     public TileTheme Theme { get; set; }
 
+    // Fog of war: tracks which tiles have been revealed
+    public bool[,] Revealed { get; private set; }
+
     public TileMap(int width, int height)
     {
         Width = width;
         Height = height;
         Tiles = new TileType[width, height];
+        Revealed = new bool[width, height];
 
         for (int x = 0; x < width; x++)
         for (int y = 0; y < height; y++)
             Tiles[x, y] = TileType.Wall;
+    }
+
+    /// <summary>
+    /// Reveal tiles around the player position within a given tile radius.
+    /// </summary>
+    public void RevealAround(Vector2 worldPos, int tileRadius = 6)
+    {
+        var (cx, cy) = WorldToTile(worldPos);
+        int r2 = tileRadius * tileRadius;
+        for (int x = cx - tileRadius; x <= cx + tileRadius; x++)
+        for (int y = cy - tileRadius; y <= cy + tileRadius; y++)
+        {
+            if (x < 0 || x >= Width || y < 0 || y >= Height) continue;
+            int dx = x - cx, dy = y - cy;
+            if (dx * dx + dy * dy <= r2)
+                Revealed[x, y] = true;
+        }
     }
 
     public TileType GetTile(int x, int y)
@@ -370,13 +391,16 @@ public class TileMap
         float scaleX = (float)mapArea.Width / (Width * TileSize);
         float scaleY = (float)mapArea.Height / (Height * TileSize);
 
-        spriteBatch.Draw(pixel, mapArea, new Color(10, 8, 6) * 0.85f);
+        spriteBatch.Draw(pixel, mapArea, new Color(6, 4, 2) * 0.9f);
 
         int step = Math.Max(1, Width / mapArea.Width + 1);
         for (int x = 0; x < Width; x += step)
         for (int y = 0; y < Height; y += step)
         {
             if (!IsWalkable(x, y)) continue;
+            // Fog of war: only show revealed tiles
+            if (!Revealed[x, y]) continue;
+
             int mx = mapArea.X + (int)(x * TileSize * scaleX);
             int my = mapArea.Y + (int)(y * TileSize * scaleY);
             var tile = Tiles[x, y];
@@ -384,7 +408,6 @@ public class TileMap
                       new Color(50, 40, 30);
             if (tile == TileType.Portal || tile == TileType.PortalLocked)
             {
-                // Portal: large blinking dot on minimap
                 var portalC = tile == TileType.Portal ? new Color(80, 220, 240) : new Color(100, 80, 60);
                 float blink = tile == TileType.Portal ? (MathF.Sin(gameTimer * 5f) * 0.3f + 0.7f) : 0.5f;
                 spriteBatch.Draw(pixel, new Rectangle(mx - 2, my - 2, 6, 6), portalC * blink);
@@ -397,11 +420,16 @@ public class TileMap
         int py = mapArea.Y + (int)(playerPos.Y * scaleY);
         spriteBatch.Draw(pixel, new Rectangle(px - 1, py - 1, 3, 3), Color.White);
 
+        // Only show enemies in revealed areas
         foreach (var epos in enemyPositions)
         {
-            int ex = mapArea.X + (int)(epos.X * scaleX);
-            int ey = mapArea.Y + (int)(epos.Y * scaleY);
-            spriteBatch.Draw(pixel, new Rectangle(ex, ey, 2, 2), new Color(200, 60, 50));
+            var (etx, ety) = WorldToTile(epos);
+            if (etx >= 0 && etx < Width && ety >= 0 && ety < Height && Revealed[etx, ety])
+            {
+                int ex = mapArea.X + (int)(epos.X * scaleX);
+                int ey = mapArea.Y + (int)(epos.Y * scaleY);
+                spriteBatch.Draw(pixel, new Rectangle(ex, ey, 2, 2), new Color(200, 60, 50));
+            }
         }
 
         DrawBorder(spriteBatch, pixel, mapArea, new Color(60, 50, 35));

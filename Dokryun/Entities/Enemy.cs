@@ -1,5 +1,6 @@
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
+using Dokryun.Systems;
 
 namespace Dokryun.Entities;
 
@@ -15,6 +16,10 @@ public class Enemy : Entity
 
     public bool IsDead => HP <= 0;
     public bool IsBoss => Type == EnemyType.DokkaebiKing;
+
+    // Elite system
+    public bool IsElite { get; set; }
+    public EliteModifier EliteModifier { get; set; } = EliteModifier.None;
 
     // Aggro system
     public bool IsAggro { get; set; }
@@ -40,6 +45,13 @@ public class Enemy : Entity
     public float TelegraphDuration { get; set; }
     public bool IsTelegraphing => TelegraphTimer > 0;
     public Vector2 TelegraphDirection { get; set; }
+
+    // Charger state
+    public bool IsCharging { get; set; }
+    public float ChargeSpeed { get; set; } = 500f;
+    public float ChargeTimer { get; set; }
+    public Vector2 ChargeDirection { get; set; }
+    public float ChargeFlashTimer { get; set; }
 
     // Slow effect (from frost arrows)
     public float SlowMultiplier { get; set; } = 1f;
@@ -127,6 +139,9 @@ public class Enemy : Entity
             case EnemyType.ThunderMonk:
                 MaxHP = 88; Speed = 60; Attack = 20; AttackRange = 120f; _attackCooldown = 3.5f;
                 break;
+            case EnemyType.Charger:
+                MaxHP = 70; Speed = 55; Attack = 16; _attackCooldown = 3.0f; AttackRange = 200f;
+                break;
             // Boss
             case EnemyType.DokkaebiKing:
                 MaxHP = 1200; Speed = 60; Attack = 20; _attackCooldown = 1.8f; AttackRange = 55f;
@@ -148,6 +163,7 @@ public class Enemy : Entity
         if (Type == EnemyType.ShieldBearer) { _boundsWidth = 26; _boundsHeight = 26; }
         if (Type == EnemyType.GhostFire || Type == EnemyType.Assassin) { _boundsWidth = 16; _boundsHeight = 16; }
         if (Type == EnemyType.ThunderMonk) { _boundsWidth = 22; _boundsHeight = 22; }
+        if (Type == EnemyType.Charger) { _boundsWidth = 24; _boundsHeight = 24; }
     }
 
     public override void Update(GameTime gameTime)
@@ -158,6 +174,8 @@ public class Enemy : Entity
 
         if (HitFlashTimer > 0) HitFlashTimer -= dt;
         if (TelegraphTimer > 0) TelegraphTimer -= dt;
+        if (ChargeFlashTimer > 0) ChargeFlashTimer -= dt;
+        if (ChargeTimer > 0) ChargeTimer -= dt;
 
         if (_slowTimer > 0)
         {
@@ -321,7 +339,7 @@ public class Enemy : Entity
 
     private (int w, int h) GetBaseSize() => Type switch
     {
-        EnemyType.Warrior or EnemyType.DarkKnight or EnemyType.BladeDancer => (24, 24),
+        EnemyType.Warrior or EnemyType.DarkKnight or EnemyType.BladeDancer or EnemyType.Charger => (24, 24),
         EnemyType.ShieldBearer => (26, 26),
         EnemyType.GhostFire or EnemyType.Assassin => (16, 16),
         EnemyType.ThunderMonk => (22, 22),
@@ -336,6 +354,23 @@ public class Enemy : Entity
         int px = (int)Position.X;
         int py = (int)Position.Y;
         var rect = new Rectangle(px - w / 2, py - h / 2, w, h);
+
+        // Elite aura
+        if (IsElite && !IsDeathAnimating)
+        {
+            var auraColor = EliteSystem.GetAuraColor(EliteModifier);
+            float pulse = MathF.Sin(Player.GameTime * 5f) * 0.15f + 0.3f;
+            Player.DrawRect(spriteBatch, new Rectangle(px - w / 2 - 4, py - h / 2 - 4, w + 8, h + 8), auraColor * pulse);
+            // Corner sparks
+            if (Player.GameTime % 0.2f < 0.05f)
+            {
+                float sparkAngle = Player.GameTime * 8f;
+                int sx = px + (int)(MathF.Cos(sparkAngle) * (w / 2 + 5));
+                int sy = py + (int)(MathF.Sin(sparkAngle) * (h / 2 + 5));
+                Player.DrawRect(spriteBatch, new Rectangle(sx - 2, sy - 2, 4, 4), auraColor * 0.8f);
+            }
+        }
+
         Player.DrawRect(spriteBatch, rect, color);
 
         if (!IsDeathAnimating)
@@ -409,25 +444,48 @@ public class Enemy : Entity
                     // Prayer beads
                     Player.DrawRect(spriteBatch, new Rectangle(px - 3, py - 14, 6, 3), new Color(200, 180, 80));
                     break;
+                case EnemyType.Charger:
+                    // Shoulder armor
+                    Player.DrawRect(spriteBatch, new Rectangle(px - 14, py - 8, 5, 10), new Color(180, 100, 40));
+                    Player.DrawRect(spriteBatch, new Rectangle(px + 9, py - 8, 5, 10), new Color(180, 100, 40));
+                    // Horn/spike on head
+                    Player.DrawRect(spriteBatch, new Rectangle(px - 2, py - 16, 4, 6), new Color(220, 160, 60));
+                    // Charge flash effect (body flashes white when telegraphing)
+                    if (IsTelegraphing || IsCharging)
+                    {
+                        float flash = MathF.Sin(ChargeFlashTimer * 20f) * 0.5f + 0.5f;
+                        Player.DrawRect(spriteBatch, new Rectangle(px - w / 2, py - h / 2, w, h), Color.White * flash * 0.6f);
+                    }
+                    break;
             }
         }
 
         float hpRatio = MaxHP > 0 ? HP / MaxHP : 1f;
-        if (!IsDead && !IsDeathAnimating && hpRatio < 1f)
+        if (!IsDead && !IsDeathAnimating && (hpRatio < 1f || IsElite))
         {
-            int barW = baseW + 6;
-            int barH = 3;
+            int barW = IsElite ? baseW + 12 : baseW + 6;
+            int barH = IsElite ? 4 : 3;
             int barX = px - barW / 2;
-            int barY = py - baseH / 2 - 7;
+            int barY = py - baseH / 2 - (IsElite ? 9 : 7);
             // Background
             Player.DrawRect(spriteBatch, new Rectangle(barX - 1, barY - 1, barW + 2, barH + 2), new Color(0, 0, 0) * 0.5f);
             Player.DrawRect(spriteBatch, new Rectangle(barX, barY, barW, barH), new Color(30, 8, 8));
             // HP fill with color based on ratio
-            var hpBarColor = hpRatio > 0.5f ? new Color(200, 50, 40) : new Color(255, 60, 40);
+            var hpBarColor = IsElite
+                ? EliteSystem.GetAuraColor(EliteModifier)
+                : (hpRatio > 0.5f ? new Color(200, 50, 40) : new Color(255, 60, 40));
             int fillW = (int)(barW * hpRatio);
             Player.DrawRect(spriteBatch, new Rectangle(barX, barY, fillW, barH), hpBarColor);
             // Top highlight
             Player.DrawRect(spriteBatch, new Rectangle(barX, barY, fillW, 1), new Color(255, 120, 100) * 0.4f);
+
+            // Elite border
+            if (IsElite)
+            {
+                var borderColor = EliteSystem.GetAuraColor(EliteModifier) * 0.6f;
+                Player.DrawRect(spriteBatch, new Rectangle(barX - 1, barY - 1, barW + 2, 1), borderColor);
+                Player.DrawRect(spriteBatch, new Rectangle(barX - 1, barY + barH, barW + 2, 1), borderColor);
+            }
         }
     }
 
@@ -548,6 +606,7 @@ public class Enemy : Entity
             EnemyType.Summoner => new Color(120, 60, 160),
             EnemyType.BladeDancer => new Color(180, 50, 80),
             EnemyType.ThunderMonk => new Color(80, 80, 180),
+            EnemyType.Charger => new Color(200, 80, 40),
             // Boss
             EnemyType.DokkaebiKing => new Color(50, 140, 70),
             _ => Color.Red
@@ -575,6 +634,7 @@ public enum EnemyType
     Summoner,       // 소환사 - 소환형 (특수 처리 필요)
     BladeDancer,    // 검무사 - 회전 공격
     ThunderMonk,    // 뇌승 - 번개 범위 공격
+    Charger,        // 돌격병 - 반짝임+궤적+돌격 (패링 필요)
     // Boss
     DokkaebiKing
 }

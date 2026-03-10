@@ -116,6 +116,29 @@ public class GameplayScene : Scene
     // Synergy notification
     private List<(string text, float timer, Color color)> _synergyNotifications = new();
 
+    // ===== NEW SYSTEMS =====
+
+    // Q/E Skills
+    private SkillSystem _skills;
+
+    // Elite system (tracked per enemy via Enemy.IsElite/EliteModifier)
+
+    // Floor timer (danger escalation)
+    private float _floorTimer;
+    private int _dangerLevel; // 0=normal, 1=warning, 2=danger
+    private const float DangerEscalationTime = 45f; // seconds per danger level
+
+    // Gold currency
+    private int _gold;
+
+    // Event rooms
+    private List<EventRoomData> _eventRooms = new();
+    private bool _eventUIOpen;
+    private int _eventUIIndex = -1;
+    private int _shopSelectedIndex;
+
+    // (hazard damage handled via DungeonObject.HazardCooldown)
+
     public override void Enter()
     {
         _pixel = new Texture2D(GraphicsDevice, 1, 1);
@@ -149,13 +172,25 @@ public class GameplayScene : Scene
             _inventory.TryAdd(Game1.InitialMeteoriteId.Value);
             _inventory.RecalculateStats(_augmentStats);
             _player.FlameSlash = _augmentStats.ExplosiveFlame;
+                    _player.MaxKi = 150f + _augmentStats.MaxKiBonus;
             Game1.InitialMeteoriteId = null;
         }
 
         _floor = 0;
         _totalKills = 0;
+        _gold = 0;
         _stageIndex = 0;
         _currentStage = StageData.Stages[_stageIndex];
+
+        // Initialize skill system
+        _skills = new SkillSystem();
+
+        // Apply meta progression bonuses
+        var meta = Game1.Meta;
+        _player.MaxHP += meta.GetBonusMaxHP();
+        _player.HP = _player.MaxHP;
+        _player.Attack += meta.GetBonusAttack();
+        _player.KiRegen += meta.GetBonusKiRegen();
 
         // Generate tile theme
         _tileTheme = new TileTheme();
@@ -183,6 +218,7 @@ public class GameplayScene : Scene
         _tileMap.Theme = _tileTheme;
 
         _player.Position = _tileMap.PlayerSpawn;
+        _tileMap.RevealAround(_tileMap.PlayerSpawn, 8); // reveal spawn area
         _player.HP = Math.Min(_player.MaxHP + _augmentStats.MaxHPBonus,
             _player.HP + _player.MaxHP * 0.2f);
 
@@ -192,9 +228,14 @@ public class GameplayScene : Scene
         _droppedItems.Clear();
         _bossPouches.Clear();
         _bossClones.Clear();
+        _eventRooms.Clear();
+        _eventUIOpen = false;
+        _eventUIIndex = -1;
 
         _floorKills = 0;
         _portalActive = false;
+        _floorTimer = 0;
+        _dangerLevel = 0;
 
         // Debug: boss skip portal near spawn (only on non-boss floors)
         if (!_isBossFloor)
@@ -226,7 +267,7 @@ public class GameplayScene : Scene
         }
         else
         {
-            // Normal floor: spawn regular enemies
+            // Normal floor: spawn regular enemies (with elite chance)
             _floorEnemyCount = _tileMap.EnemySpawns.Count;
 
             foreach (var spawnPos in _tileMap.EnemySpawns)
@@ -237,6 +278,15 @@ public class GameplayScene : Scene
                 enemy.MaxHP = (int)(enemy.MaxHP * scale);
                 enemy.HP = enemy.MaxHP;
                 enemy.Attack *= scale;
+
+                // Elite chance
+                if (EliteSystem.ShouldBeElite(_floor))
+                {
+                    enemy.IsElite = true;
+                    enemy.EliteModifier = EliteSystem.RollModifier();
+                    EliteSystem.ApplyModifier(enemy, enemy.EliteModifier);
+                }
+
                 _enemies.Add(enemy);
             }
 
@@ -270,6 +320,74 @@ public class GameplayScene : Scene
                             });
                             break;
                         }
+                    }
+                }
+            }
+
+            // Event rooms (1-2 per floor, starting floor 2)
+            if (_floor >= 2)
+            {
+                int eventCount = rng.Next(1, 3);
+                var usedPositions = new List<Vector2>();
+                for (int ev = 0; ev < eventCount; ev++)
+                {
+                    // Find a walkable spot far from spawn
+                    for (int attempt = 0; attempt < 30; attempt++)
+                    {
+                        int tx = rng.Next(_tileMap.Width);
+                        int ty = rng.Next(_tileMap.Height);
+                        if (!_tileMap.IsWalkable(tx, ty)) continue;
+                        var wpos = _tileMap.TileToWorld(tx, ty);
+                        if (Vector2.Distance(wpos, _tileMap.PlayerSpawn) < 250f) continue;
+                        bool tooClose = false;
+                        foreach (var up in usedPositions)
+                            if (Vector2.Distance(wpos, up) < 150f) { tooClose = true; break; }
+                        if (tooClose) continue;
+
+                        usedPositions.Add(wpos);
+                        var eventType = (EventType)(rng.Next(4)); // Shop, Altar, Healing, Gambling
+                        EventRoomData eventData = eventType switch
+                        {
+                            EventType.Shop => EventRoomData.CreateShop(wpos, _floor),
+                            EventType.Altar => EventRoomData.CreateAltar(wpos, _floor),
+                            EventType.HealingSpring => EventRoomData.CreateHealingSpring(wpos),
+                            EventType.GamblingDen => EventRoomData.CreateGamblingDen(wpos, _floor),
+                            _ => EventRoomData.CreateShop(wpos, _floor)
+                        };
+                        int evIndex = _eventRooms.Count;
+                        _eventRooms.Add(eventData);
+
+                        DungeonObjectType objType = eventType switch
+                        {
+                            EventType.Shop => DungeonObjectType.ShopNPC,
+                            EventType.Altar => DungeonObjectType.Altar,
+                            EventType.HealingSpring => DungeonObjectType.HealingSpring,
+                            EventType.GamblingDen => DungeonObjectType.GamblingDen,
+                            _ => DungeonObjectType.ShopNPC
+                        };
+                        _dungeonObjects.Add(new DungeonObject { Position = wpos, Type = objType, EventIndex = evIndex, InteractRadius = 40f });
+                        break;
+                    }
+                }
+            }
+
+            // Environmental hazards (floor 3+)
+            if (_floor >= 3)
+            {
+                int hazardCount = 3 + _floor;
+                for (int h = 0; h < hazardCount; h++)
+                {
+                    for (int attempt = 0; attempt < 15; attempt++)
+                    {
+                        int tx = rng.Next(_tileMap.Width);
+                        int ty = rng.Next(_tileMap.Height);
+                        if (!_tileMap.IsWalkable(tx, ty)) continue;
+                        var wpos = _tileMap.TileToWorld(tx, ty);
+                        if (Vector2.Distance(wpos, _tileMap.PlayerSpawn) < 150f) continue;
+
+                        var hazardType = rng.NextDouble() < 0.6 ? DungeonObjectType.PoisonTrap : DungeonObjectType.SpikeTrap;
+                        _dungeonObjects.Add(new DungeonObject { Position = wpos, Type = hazardType, InteractRadius = 18f });
+                        break;
                     }
                 }
             }
@@ -315,6 +433,7 @@ public class GameplayScene : Scene
 
         _particles.Update(effectiveDt);
         _damageNumbers.Update(effectiveDt);
+        _skills?.Update(dt);
 
         if (_comboTimer > 0)
         {
@@ -384,6 +503,9 @@ public class GameplayScene : Scene
         else
             _player.Position = _tileMap.ResolveCollision(_player.Position, 24, 24);
 
+        // Reveal fog of war around player
+        _tileMap.RevealAround(_player.Position, 6);
+
         // Ghost trail
         if (_player.Velocity.LengthSquared() > 100)
         {
@@ -437,7 +559,40 @@ public class GameplayScene : Scene
             }
         }
 
-        // (Arrow Rain removed - swordsman only)
+        // Right-click: 카운터/패링
+        if (InputManager.IsRightClick() && _skills.TryActivateCounter(_player.Ki))
+        {
+            _player.Ki -= _skills.CounterKiCost;
+            _particles.EmitImpactRing(_player.Position, new Color(100, 200, 255), 40f, 12);
+            FlashScreen(new Color(100, 200, 255), 0.05f);
+            AudioManager.Play("dash", 0.6f, 0.4f, 0.1f);
+        }
+
+        // Danger escalation timer
+        if (!_isBossFloor)
+        {
+            _floorTimer += dt;
+            int newDanger = (int)(_floorTimer / DangerEscalationTime);
+            if (newDanger > _dangerLevel && newDanger <= 2)
+            {
+                _dangerLevel = newDanger;
+                _itemPickupText = _dangerLevel == 1 ? "위험도 상승! 적이 강해진다..." : "최대 위험! 적이 매우 강해졌다!";
+                _itemPickupTimer = 2f;
+                _itemPickupColor = _dangerLevel == 1 ? new Color(255, 200, 60) : new Color(255, 60, 40);
+                FlashScreen(_itemPickupColor, 0.15f);
+
+                // Buff remaining enemies
+                foreach (var e in _enemies)
+                {
+                    if (!e.IsDead && !e.IsBoss)
+                    {
+                        e.Speed *= 1.15f;
+                        e.BaseSpeed *= 1.15f;
+                        e.Attack *= 1.15f;
+                    }
+                }
+            }
+        }
 
         // Update enemies with aggro
         foreach (var enemy in _enemies)
@@ -615,6 +770,7 @@ public class GameplayScene : Scene
                     EnemyType.Summoner => new Color(160, 100, 220),
                     EnemyType.BladeDancer => new Color(200, 70, 100),
                     EnemyType.ThunderMonk => new Color(100, 100, 220),
+                    EnemyType.Charger => new Color(255, 130, 50),
                     _ => Color.Red
                 };
 
@@ -630,7 +786,30 @@ public class GameplayScene : Scene
                     _camera.ImpactZoom(0.02f);
                 }
 
-                // Regular enemies only drop health/ki
+                // Gold drop
+                int goldDrop = 3 + _floor;
+                if (e.IsElite) goldDrop *= 3;
+                _gold += goldDrop;
+
+                // Elite enemies: guaranteed meteorite drop + extra particles
+                if (e.IsElite)
+                {
+                    _droppedItems.Add(DroppedItem.Create(e.Position, _floor, false));
+                    _particles.EmitExplosion(e.Position, 30, EliteSystem.GetAuraColor(e.EliteModifier));
+                    _particles.EmitImpactRing(e.Position, EliteSystem.GetAuraColor(e.EliteModifier), 50f, 16);
+                    FlashScreen(EliteSystem.GetAuraColor(e.EliteModifier), 0.12f);
+                    _hitStopTimer = 0.06f;
+
+                    // Vampiric elite heals nearby enemies on death
+                    // Explosive elite explodes on death
+                    if (e.EliteModifier == EliteModifier.Explosive)
+                    {
+                        PerformExplosion(e.Position, e.Attack * 2f, 70f, new Color(255, 140, 40));
+                        _camera.Shake(5f, 0.15f);
+                    }
+                }
+
+                // Regular enemies drop health/ki
                 if (Random.Shared.NextDouble() < 0.15)
                 {
                     _dungeonObjects.Add(new DungeonObject
@@ -731,7 +910,7 @@ public class GameplayScene : Scene
                     AudioManager.Play("pickup", 0.5f, 0.1f);
                     break;
                 case DungeonObjectType.KiPickup:
-                    _player.Ki = Math.Min(_player.MaxKi, _player.Ki + 15f);
+                    _player.Ki = Math.Min((_player.MaxKi + _augmentStats.MaxKiBonus), _player.Ki + 15f);
                     _particles.EmitBurst(obj.Position, 8, new Color(50, 70, 200), 80f, 0.3f, 1.5f);
                     obj.IsActive = false;
                     AudioManager.Play("pickup", 0.5f, 0.2f);
@@ -743,12 +922,43 @@ public class GameplayScene : Scene
                         _particles.EmitExplosion(obj.Position, 20, new Color(220, 40, 40));
                         FlashScreen(new Color(200, 50, 50), 0.2f);
                         AudioManager.Play("portal", 0.8f, -0.2f);
-                        // Jump directly to boss floor
                         _floor = _currentStage.FloorCount - 1;
                         _state = GameState.FloorTransition;
                         _floorTransitionTimer = 1.5f;
                         GenerateFloor();
                         return;
+                    }
+                    break;
+
+                // Event room objects
+                case DungeonObjectType.ShopNPC:
+                case DungeonObjectType.Altar:
+                case DungeonObjectType.HealingSpring:
+                case DungeonObjectType.GamblingDen:
+                    if (!obj.IsOpened && InputManager.IsKeyPressed(Keys.E))
+                    {
+                        HandleEventInteraction(obj);
+                    }
+                    break;
+
+                // Hazards (no E key, just proximity damage)
+                case DungeonObjectType.PoisonTrap:
+                    if (obj.HazardCooldown <= 0)
+                    {
+                        TryDamagePlayer(3f + _floor);
+                        _particles.EmitBurst(_player.Position, 6, new Color(60, 200, 40), 60f, 0.2f, 1.5f);
+                        _damageNumbers.SpawnText(_player.Position, "POISON", new Color(80, 220, 60));
+                        obj.HazardCooldown = 1.5f;
+                    }
+                    break;
+                case DungeonObjectType.SpikeTrap:
+                    bool spikesUp = MathF.Sin(obj.AnimTimer * 2f) > 0.3f;
+                    if (spikesUp && obj.HazardCooldown <= 0)
+                    {
+                        TryDamagePlayer(5f + _floor * 1.5f);
+                        _particles.EmitBurst(_player.Position, 8, new Color(200, 190, 170), 80f, 0.15f, 2f);
+                        _camera.Shake(2f, 0.08f);
+                        obj.HazardCooldown = 0.8f;
                     }
                     break;
             }
@@ -769,6 +979,7 @@ public class GameplayScene : Scene
 
                     _inventory.RecalculateStats(_augmentStats);
                     _player.FlameSlash = _augmentStats.ExplosiveFlame;
+                    _player.MaxKi = 150f + _augmentStats.MaxKiBonus;
 
                     // Check for newly activated synergies
                     if (!wasFocus && _augmentStats.SynergyFocusResonance)
@@ -823,7 +1034,15 @@ public class GameplayScene : Scene
             _particles.EmitImpactRing(_player.Position, new Color(255, 200, 100), 60f);
             AudioManager.Play("player_hit", 1f, -0.2f);
             AudioManager.Play("explosion", 0.6f, 0.1f);
+
+            // Store run results for death/meta screen
+            Game1.LastFloor = _floor;
+            Game1.LastKills = _totalKills;
+            Game1.LastBossDefeated = _bossDefeated;
+            Game1.LastGold = _gold;
+
             SceneManager.ChangeScene(new DeathScene(_floor, _totalKills));
+            return;
         }
 
         float hpRatio = _player.HP / _player.MaxHP;
@@ -849,6 +1068,19 @@ public class GameplayScene : Scene
     private void TryDamagePlayer(float rawDmg, Vector2? knockbackDir = null, float knockbackForce = 0f)
     {
         if (_player.IsInvincible) return;
+
+        // Counter parry check
+        if (_skills != null && _skills.IsParrying && !_skills.CounterTriggered)
+        {
+            _skills.CounterTriggered = true;
+            PerformCounterAttack();
+            _damageNumbers.SpawnText(_player.Position, "COUNTER!", new Color(100, 200, 255));
+            FlashScreen(new Color(100, 200, 255), 0.15f);
+            _hitStopTimer = 0.08f;
+            _camera.Shake(5f, 0.15f);
+            AudioManager.Play("explosion", 0.7f, 0.3f);
+            return; // Damage negated
+        }
 
         // Evasion check
         if (_augmentStats.EvasionBonus > 0 && Random.Shared.NextDouble() < _augmentStats.EvasionBonus)
@@ -1145,12 +1377,83 @@ public class GameplayScene : Scene
                 }
                 break;
 
+            case EnemyType.Charger:
+                UpdateChargerAI(enemy, dt, dist, toPlayer);
+                break;
+
             case EnemyType.DokkaebiKing:
                 if (enemy == _boss)
                     UpdateBossAI(enemy, dt, dist, toPlayer);
                 else
                     UpdateCloneBossAI(enemy, dt, dist, toPlayer);
                 break;
+        }
+    }
+
+    private void UpdateChargerAI(Enemy enemy, float dt, float dist, Vector2 toPlayer)
+    {
+        // Charger: telegraph (body flashes + trajectory line) → 0.5s delay → charge forward
+        if (enemy.IsCharging)
+        {
+            // Charging forward
+            enemy.Position += enemy.ChargeDirection * enemy.ChargeSpeed * dt;
+            enemy.ChargeFlashTimer += dt * 2f; // keep flashing during charge
+
+            // Trail particles
+            if (_gameTimer % 0.03f < dt)
+            {
+                _particles.Emit(enemy.Position, -enemy.ChargeDirection * 80f + new Vector2(0, -20),
+                    new Color(255, 150, 50) * 0.7f, 0.2f, 3f);
+            }
+
+            // Check charge duration
+            if (enemy.ChargeTimer <= 0)
+            {
+                enemy.IsCharging = false;
+                enemy.ChargeFlashTimer = 0;
+                // Impact effect at end
+                _particles.EmitExplosion(enemy.Position, 12, new Color(255, 120, 40));
+                _camera.Shake(3f, 0.1f);
+                AudioManager.Play("explosion", 0.5f, -0.3f);
+            }
+
+            // Damage player on contact
+            if (Vector2.Distance(enemy.Position, _player.Position) < 30f)
+            {
+                TryDamagePlayer(enemy.Attack * 1.5f, toPlayer, 200f);
+            }
+            return;
+        }
+
+        // Telegraph phase: body flashes, draws trajectory
+        if (enemy.IsTelegraphing)
+        {
+            enemy.ChargeFlashTimer += dt;
+            // When telegraph ends, begin charge
+            if (enemy.TelegraphTimer < 0.05f && enemy.TelegraphTimer > 0)
+            {
+                enemy.IsCharging = true;
+                enemy.ChargeTimer = 0.4f; // charge duration
+                enemy.ChargeDirection = enemy.TelegraphDirection;
+                AudioManager.Play("dash", 0.7f, -0.4f, 0.1f);
+                // Burst particles at charge start
+                _particles.EmitDirectionalSpark(enemy.Position, enemy.TelegraphDirection, 12, new Color(255, 180, 60), 200f);
+            }
+            return;
+        }
+
+        // Normal behavior: approach player
+        if (dist > 80)
+            enemy.MoveToward(_player.Position, dt);
+
+        // Start charge telegraph when in range
+        if (dist < enemy.AttackRange && enemy.CanAttack() && _tileMap.HasLineOfSight(enemy.Position, _player.Position))
+        {
+            enemy.StartTelegraph(toPlayer, 0.5f); // 0.5s telegraph
+            enemy.OnAttack();
+            enemy.ChargeFlashTimer = 0;
+            // Warning sound
+            AudioManager.Play("arrow_shoot", 0.4f, -0.6f, 0.05f);
         }
     }
 
@@ -2128,28 +2431,62 @@ public class GameplayScene : Scene
         float arc = _augmentStats.SwordArc * comboArcMul;
         float knockback = _augmentStats.SwordKnockback * comboKnockMul;
 
-        // Slash particles (more on stronger hits)
-        int slashParticles = combo switch { 1 => 8, 2 => 12, _ => 20 };
+        // Slash particles (more on stronger hits) - enhanced for flashy effects
+        int slashParticles = combo switch { 1 => 14, 2 => 22, _ => 35 };
         if (_augmentStats.ExplosiveFlame) slashParticles = (int)(slashParticles * 1.5f);
         for (int i = 0; i < slashParticles; i++)
         {
             float t = (float)i / slashParticles;
             float angle = aimAngle - arc / 2f + arc * t;
-            float dist = range * (0.6f + 0.4f * t);
+            float dist = range * (0.5f + 0.5f * t);
             var pos = _player.Position + new Vector2(MathF.Cos(angle), MathF.Sin(angle)) * dist;
-            var vel = new Vector2(MathF.Cos(angle), MathF.Sin(angle)) * (40f + combo * 20f);
+            var vel = new Vector2(MathF.Cos(angle), MathF.Sin(angle)) * (60f + combo * 30f);
+            float randSpread = ((float)Random.Shared.NextDouble() - 0.5f) * 20f;
+            vel += new Vector2(randSpread, randSpread);
 
             if (_augmentStats.ExplosiveFlame)
             {
                 var fireColor = Color.Lerp(new Color(255, 80, 10), new Color(255, 200, 40), (float)Random.Shared.NextDouble());
                 _particles.Emit(pos, vel * 1.5f + new Vector2(0, -30f * (float)Random.Shared.NextDouble()), fireColor,
-                    0.25f + 0.1f * t, 3f + combo * 1.5f, 60f);
+                    0.3f + 0.1f * t, 4f + combo * 2f, 60f);
             }
             else
             {
-                var slashColor = combo == 3 ? new Color(255, 240, 180) : new Color(255, 245, 220);
-                _particles.Emit(pos, vel, slashColor, 0.15f + 0.05f * t, 2f + combo);
+                var slashColor = combo switch
+                {
+                    3 => Color.Lerp(new Color(255, 240, 180), new Color(255, 200, 80), t),
+                    2 => Color.Lerp(new Color(255, 250, 220), new Color(255, 230, 160), t),
+                    _ => new Color(255, 245, 220)
+                };
+                _particles.Emit(pos, vel, slashColor, 0.2f + 0.08f * t, 2.5f + combo * 1.2f);
             }
+        }
+
+        // Crescent arc trail (sword energy wave - like 초승달 검기)
+        int arcTrailCount = combo switch { 1 => 6, 2 => 10, _ => 16 };
+        for (int i = 0; i < arcTrailCount; i++)
+        {
+            float t = (float)i / arcTrailCount;
+            float angle = aimAngle - arc / 2f + arc * t;
+            float dist2 = range * 0.85f;
+            var arcPos = _player.Position + new Vector2(MathF.Cos(angle), MathF.Sin(angle)) * dist2;
+            var perpVel = new Vector2(MathF.Cos(angle + MathF.PI / 2f), MathF.Sin(angle + MathF.PI / 2f)) * 50f;
+            var arcColor = combo == 3 ? new Color(255, 220, 120) : new Color(230, 220, 200);
+            _particles.Emit(arcPos, perpVel * 0.3f, arcColor * 0.8f, 0.12f, 3f + combo);
+        }
+
+        // Impact ring on 2nd and 3rd combo
+        if (combo >= 2)
+        {
+            var ringColor = combo == 3 ? new Color(255, 200, 80) : new Color(230, 220, 190);
+            _particles.EmitImpactRing(_player.Position + aimDir * range * 0.4f, ringColor, range * 0.5f, combo == 3 ? 16 : 10);
+        }
+
+        // Sword energy sparks flying outward on 3rd combo
+        if (combo == 3)
+        {
+            _particles.EmitDirectionalSpark(_player.Position + aimDir * 20f, aimDir, 14, new Color(255, 230, 150), 250f);
+            FlashScreen(new Color(255, 240, 200), 0.04f);
         }
 
         // Damage enemies in arc (generous: matches visual crescent)
@@ -2177,11 +2514,24 @@ public class GameplayScene : Scene
             hitCount++;
 
             _damageNumbers.Spawn(enemy.Position, dmg, isCrit);
-            _particles.EmitBurst(enemy.Position, combo == 3 ? 15 : 6, new Color(255, 220, 150), 80f + combo * 30f, 0.2f, 2f + combo);
+            int hitParticles = combo == 3 ? 20 : (combo == 2 ? 12 : 8);
+            if (isCrit) hitParticles = (int)(hitParticles * 1.5f);
+            _particles.EmitBurst(enemy.Position, hitParticles, new Color(255, 220, 150), 100f + combo * 40f, 0.25f, 2.5f + combo);
+
+            // Directional slash sparks on hit
+            _particles.EmitDirectionalSpark(enemy.Position, toEnemy, combo == 3 ? 8 : 4,
+                isCrit ? new Color(255, 200, 60) : new Color(255, 230, 180), 150f + combo * 30f);
+
+            // Crit flash
+            if (isCrit)
+            {
+                _particles.EmitImpactRing(enemy.Position, new Color(255, 240, 100), 25f, 8);
+                FlashScreen(new Color(255, 240, 200), 0.03f);
+            }
 
             // Hit stop on crit or 3rd combo
             if (isCrit || combo == 3)
-                _hitStopTimer = combo == 3 ? 0.06f : 0.04f;
+                _hitStopTimer = combo == 3 ? 0.07f : 0.05f;
 
             // Life steal
             float totalLifeSteal = _augmentStats.LifeSteal;
@@ -2608,9 +2958,10 @@ public class GameplayScene : Scene
             if (roll < 44) return EnemyType.ShieldBearer;
             if (roll < 54) return EnemyType.Assassin;
             if (roll < 62) return EnemyType.Shaman;
-            if (roll < 72) return EnemyType.FireArcher;
-            if (roll < 82) return EnemyType.PoisonThrower;
-            return roll < 91 ? EnemyType.Assassin : EnemyType.FireArcher;
+            if (roll < 70) return EnemyType.FireArcher;
+            if (roll < 78) return EnemyType.PoisonThrower;
+            if (roll < 88) return EnemyType.Charger;
+            return roll < 94 ? EnemyType.Assassin : EnemyType.FireArcher;
         }
         // Floor 7+: Tier 1+2+3+4 (Tier 4 dominant)
         if (roll < 5) return EnemyType.Soldier;
@@ -2622,10 +2973,11 @@ public class GameplayScene : Scene
         if (roll < 34) return EnemyType.Shaman;
         if (roll < 40) return EnemyType.FireArcher;
         if (roll < 46) return EnemyType.PoisonThrower;
-        if (roll < 58) return EnemyType.DarkKnight;
-        if (roll < 68) return EnemyType.Summoner;
-        if (roll < 80) return EnemyType.BladeDancer;
-        return EnemyType.ThunderMonk;
+        if (roll < 55) return EnemyType.DarkKnight;
+        if (roll < 63) return EnemyType.Summoner;
+        if (roll < 73) return EnemyType.BladeDancer;
+        if (roll < 83) return EnemyType.ThunderMonk;
+        return EnemyType.Charger;
     }
 
     private void FlashScreen(Color color, float duration)
@@ -2639,6 +2991,148 @@ public class GameplayScene : Scene
         var mouseScreen = InputManager.MousePosition;
         var inverseTransform = Matrix.Invert(_camera.GetTransform());
         return Vector2.Transform(mouseScreen, inverseTransform);
+    }
+
+    // ===== COUNTER/PARRY =====
+
+    private void PerformCounterAttack()
+    {
+        float baseDmg = (_player.Attack + _augmentStats.AttackBonus) * _skills.CounterDamageMultiplier;
+        float range = 100f;
+
+        // Visual: flashy counter burst - radial sword energy wave
+        var aimDir = _player.AimDirection;
+        float aimAngle = MathF.Atan2(aimDir.Y, aimDir.X);
+
+        // Main directional burst
+        for (int i = 0; i < 24; i++)
+        {
+            float spread = (i - 12f) / 12f * 2f;
+            float angle = aimAngle + spread;
+            var dir = new Vector2(MathF.Cos(angle), MathF.Sin(angle));
+            float speed = 200f + (float)Random.Shared.NextDouble() * 100f;
+            var color = Color.Lerp(new Color(100, 200, 255), new Color(200, 240, 255), (float)Random.Shared.NextDouble());
+            _particles.Emit(_player.Position + dir * 15f, dir * speed, color, 0.2f, 4f);
+        }
+
+        // Impact ring
+        _particles.EmitImpactRing(_player.Position, new Color(120, 220, 255), range * 0.7f, 18);
+
+        // Counter slash cross pattern
+        for (int i = 0; i < 12; i++)
+        {
+            float t = (float)i / 12;
+            float crossAngle = aimAngle + MathF.PI / 4f;
+            var crossDir = new Vector2(MathF.Cos(crossAngle), MathF.Sin(crossAngle));
+            var crossPos = _player.Position + crossDir * (t * range * 0.8f - range * 0.4f);
+            _particles.Emit(crossPos, crossDir * 30f, new Color(180, 230, 255) * 0.6f, 0.15f, 3f);
+        }
+
+        // Damage enemies in front arc
+        foreach (var enemy in _enemies)
+        {
+            if (enemy.IsDead) continue;
+            var toEnemy = enemy.Position - _player.Position;
+            float dist = toEnemy.Length();
+            if (dist > range) continue;
+
+            float enemyAngle = MathF.Atan2(toEnemy.Y, toEnemy.X);
+            float angleDiff = MathHelper.WrapAngle(enemyAngle - aimAngle);
+            if (MathF.Abs(angleDiff) > 1.8f) continue;
+
+            bool isCrit = true; // Counter always crits
+            float dmg = baseDmg * _augmentStats.CritDamageMultiplier;
+            enemy.TakeDamage(dmg);
+            enemy.ApplyKnockback(toEnemy, 350f);
+            _damageNumbers.Spawn(enemy.Position, dmg, isCrit);
+            _particles.EmitBurst(enemy.Position, 18, new Color(100, 200, 255), 120f, 0.2f, 3f);
+            _particles.EmitDirectionalSpark(enemy.Position, toEnemy, 6, new Color(180, 240, 255), 180f);
+        }
+    }
+
+
+    // ===== EVENT INTERACTIONS =====
+
+    private void HandleEventInteraction(DungeonObject obj)
+    {
+        if (obj.EventIndex < 0 || obj.EventIndex >= _eventRooms.Count) return;
+        var ev = _eventRooms[obj.EventIndex];
+        if (ev.IsUsed) return;
+
+        switch (ev.Type)
+        {
+            case EventType.Shop:
+                _eventUIOpen = true;
+                _eventUIIndex = obj.EventIndex;
+                _shopSelectedIndex = 0;
+                break;
+
+            case EventType.Altar:
+                float maxHP = _player.MaxHP + _augmentStats.MaxHPBonus;
+                if (_player.HP > ev.AltarHPCost && ev.AltarReward.HasValue)
+                {
+                    _player.HP -= ev.AltarHPCost;
+                    _droppedItems.Add(DroppedItem.CreateSpecific(obj.Position + new Vector2(0, -20), ev.AltarReward.Value));
+                    ev.IsUsed = true;
+                    obj.IsOpened = true;
+                    _particles.EmitExplosion(obj.Position, 20, new Color(200, 80, 40));
+                    FlashScreen(new Color(200, 80, 40), 0.15f);
+                    AudioManager.Play("explosion", 0.5f, 0.1f);
+                    _itemPickupText = $"제단에 피를 바쳤다... (HP -{(int)ev.AltarHPCost})";
+                    _itemPickupTimer = 2f;
+                    _itemPickupColor = new Color(200, 80, 40);
+                }
+                else
+                {
+                    _itemPickupText = "체력이 부족하다...";
+                    _itemPickupTimer = 1.5f;
+                    _itemPickupColor = new Color(255, 100, 100);
+                }
+                break;
+
+            case EventType.HealingSpring:
+                float healAmount = (_player.MaxHP + _augmentStats.MaxHPBonus) * 0.4f;
+                _player.HP = Math.Min(_player.MaxHP + _augmentStats.MaxHPBonus, _player.HP + healAmount);
+                _player.Ki = (_player.MaxKi + _augmentStats.MaxKiBonus);
+                ev.IsUsed = true;
+                obj.IsOpened = true;
+                _particles.EmitBurst(obj.Position, 20, new Color(60, 200, 255), 100f, 0.3f, 2f);
+                FlashScreen(new Color(60, 200, 255), 0.1f);
+                AudioManager.Play("pickup", 0.8f, 0.2f);
+                _itemPickupText = $"치유의 샘에서 회복했다! (HP +{(int)healAmount})";
+                _itemPickupTimer = 2f;
+                _itemPickupColor = new Color(60, 200, 255);
+                break;
+
+            case EventType.GamblingDen:
+                ev.IsUsed = true;
+                obj.IsOpened = true;
+                if (ev.GambleResult)
+                {
+                    // Good: drop 2 meteorites
+                    for (int i = 0; i < 2; i++)
+                        _droppedItems.Add(DroppedItem.Create(obj.Position, _floor + 1, false));
+                    _particles.EmitExplosion(obj.Position, 25, new Color(255, 220, 50));
+                    FlashScreen(new Color(255, 220, 50), 0.15f);
+                    AudioManager.Play("pickup", 0.9f, -0.2f);
+                    _itemPickupText = "대박! 좋은 물건을 얻었다!";
+                    _itemPickupTimer = 2f;
+                    _itemPickupColor = new Color(255, 220, 50);
+                }
+                else
+                {
+                    // Bad: take damage
+                    float gambDmg = _player.MaxHP * 0.2f;
+                    _player.HP = Math.Max(1, _player.HP - gambDmg);
+                    _particles.EmitExplosion(obj.Position, 15, new Color(100, 60, 120));
+                    FlashScreen(new Color(100, 60, 120), 0.15f);
+                    AudioManager.Play("player_hit", 0.7f);
+                    _itemPickupText = $"쪽박... 저주를 받았다! (HP -{(int)gambDmg})";
+                    _itemPickupTimer = 2f;
+                    _itemPickupColor = new Color(255, 100, 100);
+                }
+                break;
+        }
     }
 
     // ===================== DRAWING =====================
@@ -2698,6 +3192,9 @@ public class GameplayScene : Scene
         _projectiles.Draw(spriteBatch, _pixel);
         _particles.Draw(spriteBatch);
         _damageNumbers.Draw(spriteBatch);
+
+        // Dark nighttime overlay: radial darkness around player
+        DrawDarknessOverlay(spriteBatch, cameraBounds);
 
         spriteBatch.End();
 
@@ -2769,6 +3266,42 @@ public class GameplayScene : Scene
             DrawInventoryUI(spriteBatch);
 
         spriteBatch.End();
+    }
+
+    private void DrawDarknessOverlay(SpriteBatch spriteBatch, Rectangle cameraBounds)
+    {
+        // Dark nighttime atmosphere: draw darkness that gets stronger further from player
+        int playerX = (int)_player.Position.X;
+        int playerY = (int)_player.Position.Y;
+        int tileSize = TileMap.TileSize;
+
+        // Draw darkness tiles over the camera view
+        int startX = cameraBounds.Left / tileSize - 1;
+        int endX = cameraBounds.Right / tileSize + 2;
+        int startY = cameraBounds.Top / tileSize - 1;
+        int endY = cameraBounds.Bottom / tileSize + 2;
+
+        float lightRadius = 160f; // pixels of full visibility
+        float fadeRadius = 320f;  // pixels where darkness starts fading in
+
+        for (int x = startX; x < endX; x++)
+        for (int y = startY; y < endY; y++)
+        {
+            float worldX = x * tileSize + tileSize / 2f;
+            float worldY = y * tileSize + tileSize / 2f;
+            float dist = MathF.Sqrt((worldX - playerX) * (worldX - playerX) + (worldY - playerY) * (worldY - playerY));
+
+            if (dist < lightRadius) continue; // fully lit
+
+            float darkness;
+            if (dist > fadeRadius)
+                darkness = 0.85f; // max darkness
+            else
+                darkness = (dist - lightRadius) / (fadeRadius - lightRadius) * 0.85f;
+
+            spriteBatch.Draw(_pixel, new Rectangle(x * tileSize, y * tileSize, tileSize, tileSize),
+                new Color(3, 2, 5) * darkness);
+        }
     }
 
     private Rectangle GetCameraBounds()
@@ -2874,6 +3407,38 @@ public class GameplayScene : Scene
                 spriteBatch.Draw(_pixel, new Rectangle((int)enemy.Position.X - 1, (int)enemy.Position.Y - 22, 3, 8), warnColor);
                 spriteBatch.Draw(_pixel, new Rectangle((int)enemy.Position.X - 1, (int)enemy.Position.Y - 12, 3, 3), warnColor);
             }
+            else if (enemy.Type == EnemyType.Charger)
+            {
+                // Charger: long trajectory line + warning circle
+                var dir = enemy.TelegraphDirection;
+                var chargeColor = new Color(255, 100, 30) * alpha;
+                float chargeLineLen = 250f;
+
+                // Flashing trajectory line
+                float flash = MathF.Sin(_gameTimer * 25f) * 0.3f + 0.7f;
+                for (int i = 0; i < 30; i++)
+                {
+                    float t = i / 30f;
+                    float d = t * chargeLineLen;
+                    var pos = enemy.Position + dir * d;
+                    if (!_tileMap.IsWalkableWorld(pos)) break;
+                    float segAlpha = alpha * flash * (1f - t * 0.6f);
+                    int sz = (int)(4 * (1f - t * 0.5f));
+                    if (sz < 1) sz = 1;
+                    spriteBatch.Draw(_pixel, new Rectangle((int)pos.X - sz / 2, (int)pos.Y - sz / 2, sz, sz),
+                        chargeColor * segAlpha);
+                }
+
+                // Warning exclamation
+                spriteBatch.Draw(_pixel, new Rectangle((int)enemy.Position.X - 2, (int)enemy.Position.Y - 28, 4, 12), new Color(255, 60, 20) * alpha * flash);
+                spriteBatch.Draw(_pixel, new Rectangle((int)enemy.Position.X - 2, (int)enemy.Position.Y - 14, 4, 4), new Color(255, 60, 20) * alpha * flash);
+
+                // Warning circle around enemy
+                float ringPulse = progress * 15f;
+                int ringR = 16 + (int)(ringPulse % 8);
+                spriteBatch.Draw(_pixel, new Rectangle((int)enemy.Position.X - ringR, (int)enemy.Position.Y - ringR, ringR * 2, ringR * 2),
+                    new Color(255, 80, 20) * alpha * 0.15f);
+            }
             else if (enemy.Type != EnemyType.GhostFire)
             {
                 Color meleeColor = enemy.Type switch
@@ -2931,9 +3496,9 @@ public class GameplayScene : Scene
         string comboText = _cachedComboText;
         var size = Fonts.Game.MeasureString(comboText);
 
-        // Right-aligned, below floor indicator
+        // Right-aligned, below gold counter
         float posX = Game1.ScreenWidth - 20 - size.X * scale;
-        float posY = 42;
+        float posY = 58;
         var pos = new Vector2(posX, posY);
 
         Color comboColor;
@@ -2974,7 +3539,7 @@ public class GameplayScene : Scene
             new Color(120, 50, 30), new Color(30, 8, 8));
 
         // Ki/MP Orb (blue, right)
-        DrawOrb(spriteBatch, kiOrbX, orbY, orbRadius - 4, _player.Ki, _player.Ki, _player.MaxKi,
+        DrawOrb(spriteBatch, kiOrbX, orbY, orbRadius - 4, _player.Ki, _player.Ki, (_player.MaxKi + _augmentStats.MaxKiBonus),
             new Color(20, 30, 160), new Color(40, 60, 220), new Color(80, 120, 255),
             new Color(20, 30, 160), new Color(8, 8, 30));
 
@@ -3002,9 +3567,222 @@ public class GameplayScene : Scene
         DrawCollectedItemIcons(spriteBatch);
         DrawMinimap(spriteBatch);
 
+        // Skill cooldown indicators
+        DrawSkillHUD(spriteBatch);
+
+        // Gold counter
+        DrawGoldCounter(spriteBatch);
+
+        // Danger timer
+        if (!_isBossFloor)
+            DrawDangerTimer(spriteBatch);
+
         // Boss HP bar
         if (_isBossFloor && _boss != null && !_bossDefeated)
             DrawBossHPBar(spriteBatch);
+
+        // Event/Shop UI overlay
+        if (_eventUIOpen)
+            DrawEventUI(spriteBatch);
+    }
+
+    private void DrawSkillHUD(SpriteBatch spriteBatch)
+    {
+        if (_skills == null) return;
+        // Position right after Ki orb (orbs: hpOrbX=48, kiOrbX=48+68+20=136, orbRadius~30)
+        int x = 178;
+        int y = Game1.ScreenHeight - 55;
+        int size = 32;
+        var color = new Color(100, 200, 255);
+
+        float cdRatio = _skills.CounterCooldown > 0 ? Math.Clamp(_skills.CounterCooldownTimer / _skills.CounterCooldown, 0, 1) : 0;
+        bool ready = _skills.IsCounterReady;
+        bool active = _skills.IsCounterActive;
+
+        // Background
+        spriteBatch.Draw(_pixel, new Rectangle(x, y, size, size), new Color(0, 0, 0) * 0.6f);
+
+        // Cooldown overlay
+        if (!ready && !active)
+        {
+            int cdH = (int)(size * cdRatio);
+            spriteBatch.Draw(_pixel, new Rectangle(x, y, size, cdH), new Color(0, 0, 0) * 0.5f);
+        }
+
+        // Active glow (parry window)
+        if (active)
+        {
+            float pulse = MathF.Sin(_gameTimer * 10f) * 0.2f + 0.6f;
+            spriteBatch.Draw(_pixel, new Rectangle(x - 2, y - 2, size + 4, size + 4), color * pulse);
+        }
+
+        // Border
+        var borderColor = ready ? color : new Color(60, 55, 45);
+        DrawRectOutline(spriteBatch, new Rectangle(x - 1, y - 1, size + 2, size + 2), borderColor, 1);
+
+        // Icon color fill
+        spriteBatch.Draw(_pixel, new Rectangle(x + 2, y + 2, size - 4, size - 4), (ready ? color : color * 0.3f) * 0.4f);
+
+        // Key label
+        string key = "RMB";
+        var keySize = Fonts.Game.MeasureString(key);
+        float scale = 0.45f;
+        spriteBatch.DrawString(Fonts.Game, key,
+            new Vector2(x + size / 2f - keySize.X * scale / 2f, y + size / 2f - keySize.Y * scale / 2f),
+            ready ? Color.White : Color.Gray, 0, Vector2.Zero, scale, SpriteEffects.None, 0);
+
+        // Cooldown number
+        if (!ready && !active)
+        {
+            string cdText = $"{_skills.CounterCooldownTimer:F0}";
+            var cdSize = Fonts.Game.MeasureString(cdText);
+            spriteBatch.DrawString(Fonts.Game, cdText,
+                new Vector2(x + size / 2f - cdSize.X * 0.4f / 2f, y + size - 12),
+                Color.White * 0.8f, 0, Vector2.Zero, 0.4f, SpriteEffects.None, 0);
+        }
+
+        // Skill name below
+        string name = "Counter";
+        var nameSize = Fonts.Game.MeasureString(name);
+        spriteBatch.DrawString(Fonts.Game, name,
+            new Vector2(x + size / 2f - nameSize.X * 0.35f / 2f, y + size + 2),
+            Color.White * 0.6f, 0, Vector2.Zero, 0.35f, SpriteEffects.None, 0);
+    }
+
+    private void DrawGoldCounter(SpriteBatch spriteBatch)
+    {
+        int x = Game1.ScreenWidth - 120;
+        int y = 34;
+        // Gold icon
+        spriteBatch.Draw(_pixel, new Rectangle(x, y, 8, 8), new Color(255, 210, 60));
+        spriteBatch.Draw(_pixel, new Rectangle(x + 1, y + 1, 6, 6), new Color(255, 240, 100));
+        // Text
+        string goldText = $" {_gold}";
+        spriteBatch.DrawString(Fonts.Game, goldText, new Vector2(x + 10, y - 2), new Color(255, 220, 80), 0, Vector2.Zero, 0.5f, SpriteEffects.None, 0);
+    }
+
+    private void DrawDangerTimer(SpriteBatch spriteBatch)
+    {
+        float nextDanger = (_dangerLevel + 1) * DangerEscalationTime;
+        float remaining = Math.Max(0, nextDanger - _floorTimer);
+        if (_dangerLevel >= 2) remaining = 0;
+
+        int x = Game1.ScreenWidth / 2;
+        int y = 40;
+
+        // Danger level indicator
+        Color timerColor = _dangerLevel switch
+        {
+            0 => new Color(200, 200, 200),
+            1 => new Color(255, 200, 60),
+            _ => new Color(255, 60, 40)
+        };
+
+        string dangerText = _dangerLevel switch
+        {
+            0 => $"위험도: 안전 ({remaining:F0}s)",
+            1 => $"위험도: 경고 ({remaining:F0}s)",
+            _ => "위험도: 최대!"
+        };
+        var textSize = Fonts.Game.MeasureString(dangerText);
+        float scale = 0.45f;
+
+        // Background
+        int tw = (int)(textSize.X * scale) + 12;
+        spriteBatch.Draw(_pixel, new Rectangle(x - tw / 2, y, tw, 18), new Color(0, 0, 0) * 0.5f);
+
+        // Pulsing for max danger
+        float alpha = _dangerLevel >= 2 ? (MathF.Sin(_gameTimer * 4f) * 0.2f + 0.8f) : 1f;
+        spriteBatch.DrawString(Fonts.Game, dangerText,
+            new Vector2(x - textSize.X * scale / 2f, y + 2), timerColor * alpha, 0, Vector2.Zero, scale, SpriteEffects.None, 0);
+    }
+
+    private void DrawEventUI(SpriteBatch spriteBatch)
+    {
+        if (_eventUIIndex < 0 || _eventUIIndex >= _eventRooms.Count) return;
+        var ev = _eventRooms[_eventUIIndex];
+        if (ev.Type != EventType.Shop) return; // Only shop has UI
+
+        int panelW = 400;
+        int panelH = 280;
+        int px = (Game1.ScreenWidth - panelW) / 2;
+        int py = (Game1.ScreenHeight - panelH) / 2;
+
+        // Background
+        spriteBatch.Draw(_pixel, new Rectangle(px - 2, py - 2, panelW + 4, panelH + 4), new Color(80, 70, 50));
+        spriteBatch.Draw(_pixel, new Rectangle(px, py, panelW, panelH), new Color(20, 16, 12));
+
+        // Title
+        string title = "행상인의 물건";
+        var titleSize = Fonts.Game.MeasureString(title);
+        spriteBatch.DrawString(Fonts.Game, title, new Vector2(px + panelW / 2f - titleSize.X * 0.6f / 2f, py + 10), new Color(255, 220, 100), 0, Vector2.Zero, 0.6f, SpriteEffects.None, 0);
+
+        // Gold display
+        string goldStr = $"소지금: {_gold}G";
+        spriteBatch.DrawString(Fonts.Game, goldStr, new Vector2(px + panelW - 130, py + 14), new Color(255, 210, 60), 0, Vector2.Zero, 0.45f, SpriteEffects.None, 0);
+
+        // Items
+        for (int i = 0; i < ev.ShopItems.Count; i++)
+        {
+            var item = ev.ShopItems[i];
+            var info = MeteoriteDatabase.Get(item.MeteoriteId);
+            int iy = py + 45 + i * 65;
+            bool selected = i == _shopSelectedIndex;
+            bool sold = item.IsSold;
+
+            // Selection highlight
+            if (selected)
+                spriteBatch.Draw(_pixel, new Rectangle(px + 10, iy - 2, panelW - 20, 58), new Color(80, 70, 50) * 0.5f);
+
+            // Item color swatch
+            var rarityColor = MeteoriteDatabase.RarityColor(info.Rarity);
+            spriteBatch.Draw(_pixel, new Rectangle(px + 20, iy + 5, 12, 12), sold ? Color.Gray * 0.5f : info.MainColor);
+            spriteBatch.Draw(_pixel, new Rectangle(px + 18, iy + 3, 16, 1), rarityColor * 0.6f);
+
+            // Name + description
+            var nameColor = sold ? Color.Gray * 0.5f : rarityColor;
+            spriteBatch.DrawString(Fonts.Game, $"[{MeteoriteDatabase.RarityName(info.Rarity)}] {info.Name}",
+                new Vector2(px + 40, iy + 2), nameColor, 0, Vector2.Zero, 0.45f, SpriteEffects.None, 0);
+            spriteBatch.DrawString(Fonts.Game, info.Description,
+                new Vector2(px + 40, iy + 20), Color.White * (sold ? 0.3f : 0.7f), 0, Vector2.Zero, 0.35f, SpriteEffects.None, 0);
+
+            // Price
+            string priceStr = sold ? "판매됨" : $"{item.Price}G";
+            var priceColor = sold ? Color.Gray * 0.5f : (_gold >= item.Price ? new Color(255, 210, 60) : new Color(255, 80, 80));
+            spriteBatch.DrawString(Fonts.Game, priceStr, new Vector2(px + panelW - 80, iy + 8), priceColor, 0, Vector2.Zero, 0.45f, SpriteEffects.None, 0);
+        }
+
+        // Instructions
+        spriteBatch.DrawString(Fonts.Game, "W/S: 선택  Enter: 구매  ESC: 닫기",
+            new Vector2(px + 20, py + panelH - 30), Color.White * 0.5f, 0, Vector2.Zero, 0.35f, SpriteEffects.None, 0);
+
+        // Handle shop input
+        if (InputManager.IsKeyPressed(Keys.W) || InputManager.IsKeyPressed(Keys.Up))
+            _shopSelectedIndex = Math.Max(0, _shopSelectedIndex - 1);
+        if (InputManager.IsKeyPressed(Keys.S) || InputManager.IsKeyPressed(Keys.Down))
+            _shopSelectedIndex = Math.Min(ev.ShopItems.Count - 1, _shopSelectedIndex + 1);
+        if (InputManager.IsKeyPressed(Keys.Escape))
+            _eventUIOpen = false;
+        if (InputManager.IsKeyPressed(Keys.Enter))
+        {
+            var shopItem = ev.ShopItems[_shopSelectedIndex];
+            if (!shopItem.IsSold && _gold >= shopItem.Price)
+            {
+                if (_inventory.TryAdd(shopItem.MeteoriteId))
+                {
+                    _gold -= shopItem.Price;
+                    shopItem.IsSold = true;
+                    _inventory.RecalculateStats(_augmentStats);
+                    _player.FlameSlash = _augmentStats.ExplosiveFlame;
+                    _player.MaxKi = 150f + _augmentStats.MaxKiBonus;
+                    AudioManager.Play("pickup", 0.8f, -0.1f);
+                    var mInfo = MeteoriteDatabase.Get(shopItem.MeteoriteId);
+                    _itemPickupText = $"구매: {mInfo.Name}";
+                    _itemPickupTimer = 1.5f;
+                    _itemPickupColor = mInfo.MainColor;
+                }
+            }
+        }
     }
 
     private void DrawOrb(SpriteBatch spriteBatch, int cx, int cy, int radius, float current, float trailing, float max,
@@ -3279,9 +4057,9 @@ public class GameplayScene : Scene
     private void DrawCollectedItemIcons(SpriteBatch spriteBatch)
     {
         int x = 16;
-        int y = Game1.ScreenHeight - 44;
-        int iconSize = 26;
-        int gap = 3;
+        int y = Game1.ScreenHeight - 108;
+        int iconSize = 24;
+        int gap = 2;
 
         var items = _inventory.GetSortedItems();
 
@@ -3473,7 +4251,7 @@ public class GameplayScene : Scene
         var statLines = new List<(string category, string name, string value, Color color)>
         {
             ("기본", "체력 (HP)", $"{_player.HP:F0} / {_player.MaxHP + s.MaxHPBonus:F0}", new Color(220, 80, 80)),
-            ("기본", "기력 (Ki)", $"{_player.Ki:F0} / {_player.MaxKi:F0}", new Color(80, 100, 220)),
+            ("기본", "기력 (Ki)", $"{_player.Ki:F0} / {(_player.MaxKi + _augmentStats.MaxKiBonus):F0}", new Color(80, 100, 220)),
             ("기본", "이동속도", $"{200f:F0}", new Color(180, 255, 200)),
             ("", "", "", Color.Transparent), // separator
             ("공격", "공격력", $"{_player.Attack + s.AttackBonus:F1}", new Color(255, 200, 120)),
@@ -3620,6 +4398,7 @@ public class GameplayScene : Scene
                         _inventory.RemoveAll(id);
                         _inventory.RecalculateStats(_augmentStats);
                         _player.FlameSlash = _augmentStats.ExplosiveFlame;
+                    _player.MaxKi = 150f + _augmentStats.MaxKiBonus;
                         _inventoryDestroyConfirm = false;
                         if (_inventorySelectedSlot >= _inventory.GetSortedItems().Count)
                             _inventorySelectedSlot = Math.Max(0, _inventory.GetSortedItems().Count - 1);
