@@ -50,36 +50,49 @@ public class TitleScene : Scene
 
     public override void Draw(SpriteBatch spriteBatch)
     {
-        GraphicsDevice.Clear(new Color(15, 12, 10));
+        GraphicsDevice.Clear(new Color(12, 10, 8));
 
         spriteBatch.Begin(samplerState: SamplerState.PointClamp);
+
+        // Subtle vertical gradient overlay (darker edges)
+        for (int i = 0; i < 6; i++)
+        {
+            float a = (1f - i / 6f) * 0.15f;
+            spriteBatch.Draw(_pixel, new Rectangle(0, i * 20, Game1.ScreenWidth, 20), new Color(0, 0, 0) * a);
+            spriteBatch.Draw(_pixel, new Rectangle(0, Game1.ScreenHeight - (i + 1) * 20, Game1.ScreenWidth, 20), new Color(0, 0, 0) * a);
+        }
 
         _ambientParticles.Draw(spriteBatch);
 
         // Decorative lines
-        int lineY = 260;
-        DrawHorizontalLine(spriteBatch, lineY, new Color(80, 60, 40));
-        DrawHorizontalLine(spriteBatch, lineY + 180, new Color(80, 60, 40));
+        int lineY = 265;
+        DrawHorizontalLine(spriteBatch, lineY, new Color(100, 75, 45) * 0.6f);
+        DrawHorizontalLine(spriteBatch, lineY + 175, new Color(100, 75, 45) * 0.6f);
+
+        // Title glow
+        float glowPulse = MathF.Sin(_titlePulse * 0.8f) * 0.04f + 0.08f;
+        var titleCenter = new Vector2(Game1.ScreenWidth / 2f, 300);
+        spriteBatch.Draw(_pixel, new Rectangle((int)titleCenter.X - 80, (int)titleCenter.Y - 15, 160, 40), new Color(220, 180, 100) * glowPulse);
 
         // Title: 독련
-        float pulse = 0.9f + 0.1f * MathF.Sin(_titlePulse);
-        var titleColor = new Color(220, 190, 140);
-        var shadowColor = new Color(30, 20, 10);
+        float pulse = 0.95f + 0.05f * MathF.Sin(_titlePulse);
+        var titleColor = new Color(230, 200, 150);
+        var shadowColor = new Color(20, 15, 8);
         string title = "독 련";
         var titleSize = Fonts.Title.MeasureString(title);
         var titlePos = new Vector2(Game1.ScreenWidth / 2f - titleSize.X * pulse / 2f, 280);
 
-        // Shadow
-        spriteBatch.DrawString(Fonts.Title, title, titlePos + new Vector2(2, 2), shadowColor, 0, Vector2.Zero, pulse, SpriteEffects.None, 0);
-        // Main
+        // Shadow (deeper)
+        spriteBatch.DrawString(Fonts.Title, title, titlePos + new Vector2(3, 3), shadowColor * 0.6f, 0, Vector2.Zero, pulse, SpriteEffects.None, 0);
+        spriteBatch.DrawString(Fonts.Title, title, titlePos + new Vector2(1, 1), shadowColor, 0, Vector2.Zero, pulse, SpriteEffects.None, 0);
         spriteBatch.DrawString(Fonts.Title, title, titlePos, titleColor, 0, Vector2.Zero, pulse, SpriteEffects.None, 0);
 
-        // Subtitle: DOKRYUN
+        // Subtitle: DOKRYUN (letter-spaced, fade in)
         float alpha = MathF.Max(0, MathF.Min(1, (_timer - 0.5f) * 2f));
         string subtitle = "D O K R Y U N";
         var subSize = Fonts.Game.MeasureString(subtitle);
-        var subPos = new Vector2(Game1.ScreenWidth / 2f - subSize.X / 2f, 330);
-        spriteBatch.DrawString(Fonts.Game, subtitle, subPos, new Color(150, 120, 80) * alpha);
+        var subPos = new Vector2(Game1.ScreenWidth / 2f - subSize.X * 0.8f / 2f, 332);
+        spriteBatch.DrawString(Fonts.Game, subtitle, subPos, new Color(160, 130, 85) * alpha, 0, Vector2.Zero, 0.8f, SpriteEffects.None, 0);
 
         // Description
         if (_timer > 1f)
@@ -88,37 +101,41 @@ public class TitleScene : Scene
             string desc = "홀로 싸우며, 윤회하는 자";
             var descSize = Fonts.Game.MeasureString(desc);
             spriteBatch.DrawString(Fonts.Game, desc,
-                new Vector2(Game1.ScreenWidth / 2f - descSize.X / 2f, 360),
-                new Color(120, 100, 70) * descAlpha);
+                new Vector2(Game1.ScreenWidth / 2f - descSize.X * 0.8f / 2f, 360),
+                new Color(110, 95, 65) * descAlpha, 0, Vector2.Zero, 0.8f, SpriteEffects.None, 0);
         }
 
-        // "Enter 키를 눌러 시작" blinking
+        // "Enter 키를 눌러 시작" - smooth fade pulse instead of harsh blink
         if (_timer > 1.5f)
         {
-            float blink = MathF.Sin(_timer * 3f) * 0.5f + 0.5f;
-            string prompt = "[ Enter 키를 눌러 시작 ]";
+            float fadeIn = MathF.Min(1f, (_timer - 1.5f) * 2f);
+            float blink = MathF.Sin(_timer * 2.5f) * 0.3f + 0.7f;
+            string prompt = "Enter 키를 눌러 시작";
             var promptSize = Fonts.Game.MeasureString(prompt);
+            float px = Game1.ScreenWidth / 2f - promptSize.X * 0.7f / 2f;
             spriteBatch.DrawString(Fonts.Game, prompt,
-                new Vector2(Game1.ScreenWidth / 2f - promptSize.X / 2f, 500),
-                new Color(180, 160, 130) * blink);
+                new Vector2(px, 500),
+                new Color(180, 160, 130) * blink * fadeIn, 0, Vector2.Zero, 0.7f, SpriteEffects.None, 0);
         }
 
         // Version
         spriteBatch.DrawString(Fonts.Game, "v0.1",
-            new Vector2(Game1.ScreenWidth - 60, Game1.ScreenHeight - 30),
-            new Color(60, 50, 40));
+            new Vector2(Game1.ScreenWidth - 55, Game1.ScreenHeight - 28),
+            new Color(50, 42, 32), 0, Vector2.Zero, 0.7f, SpriteEffects.None, 0);
 
         spriteBatch.End();
     }
 
     private void DrawHorizontalLine(SpriteBatch spriteBatch, int y, Color color)
     {
-        int margin = 200;
-        for (int x = margin; x < Game1.ScreenWidth - margin; x += 8)
-            spriteBatch.Draw(_pixel, new Rectangle(x, y, 4, 1), color);
+        int margin = 220;
+        // Continuous thin line with fading ends
+        int lineW = Game1.ScreenWidth - margin * 2;
+        spriteBatch.Draw(_pixel, new Rectangle(margin, y, lineW, 1), color);
 
-        int ornSize = 5;
-        spriteBatch.Draw(_pixel, new Rectangle(margin - ornSize - 4, y - ornSize / 2, ornSize, ornSize), color * 0.8f);
-        spriteBatch.Draw(_pixel, new Rectangle(Game1.ScreenWidth - margin + 4, y - ornSize / 2, ornSize, ornSize), color * 0.8f);
+        // End ornaments (small diamonds)
+        int ornSize = 3;
+        spriteBatch.Draw(_pixel, new Rectangle(margin - ornSize - 3, y - 1, ornSize, ornSize), color * 0.7f);
+        spriteBatch.Draw(_pixel, new Rectangle(Game1.ScreenWidth - margin + 3, y - 1, ornSize, ornSize), color * 0.7f);
     }
 }

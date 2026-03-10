@@ -32,9 +32,41 @@ public class Projectile
     // Trail timer
     public float TrailTimer { get; set; }
 
-    public Rectangle Bounds => new Rectangle(
+    // Crescent wave projectile
+    public bool IsCrescent { get; set; }
+    public float InitialLife { get; set; }
+
+    public Rectangle Bounds => IsCrescent ? CrescentBounds : new Rectangle(
         (int)(Position.X - Size / 2), (int)(Position.Y - Size / 2),
         (int)Size, (int)Size);
+
+    private Rectangle CrescentBounds
+    {
+        get
+        {
+            float lifeRatio = InitialLife > 0 ? Life / InitialLife : 1f;
+            float scale = 1f + (1f - lifeRatio) * 0.3f;
+            float radius = 45f * scale;
+            float arcSpan = 2.8f;
+            float travelAngle = MathF.Atan2(Velocity.Y, Velocity.X);
+
+            // Compute bounding box of the crescent arc points
+            float minX = Position.X, maxX = Position.X;
+            float minY = Position.Y, maxY = Position.Y;
+            for (int i = 0; i <= 8; i++)
+            {
+                float t = (float)i / 8;
+                float angle = travelAngle - arcSpan / 2f + arcSpan * t;
+                float px = Position.X + MathF.Cos(angle) * radius;
+                float py = Position.Y + MathF.Sin(angle) * radius;
+                if (px < minX) minX = px;
+                if (px > maxX) maxX = px;
+                if (py < minY) minY = py;
+                if (py > maxY) maxY = py;
+            }
+            return new Rectangle((int)minX, (int)minY, (int)(maxX - minX), (int)(maxY - minY));
+        }
+    }
 
     public void Update(float deltaTime)
     {
@@ -51,6 +83,12 @@ public class Projectile
     public void Draw(SpriteBatch spriteBatch, Texture2D pixel)
     {
         if (!IsActive) return;
+
+        if (IsCrescent)
+        {
+            DrawCrescent(spriteBatch, pixel);
+            return;
+        }
 
         // Arrow shape: elongated in direction of travel
         float angle = MathF.Atan2(Velocity.Y, Velocity.X);
@@ -77,6 +115,85 @@ public class Projectile
         spriteBatch.Draw(pixel,
             new Rectangle((int)tip.X - 2, (int)tip.Y - 2, 4, 4),
             Color);
+    }
+
+    private void DrawCrescent(SpriteBatch spriteBatch, Texture2D pixel)
+    {
+        float travelAngle = MathF.Atan2(Velocity.Y, Velocity.X);
+        float lifeRatio = InitialLife > 0 ? Life / InitialLife : 1f;
+
+        // Fade out near end of life
+        float alpha = MathF.Min(1f, lifeRatio * 3f);
+        // Scale up slightly over time for "expanding wave" feel
+        float scale = 1f + (1f - lifeRatio) * 0.3f;
+
+        float outerRadius = 45f * scale;
+        float thickness = 18f * scale;
+        float arcSpan = 2.8f; // wide crescent arc
+
+        // Perpendicular to travel direction = crescent faces forward
+        float centerAngle = travelAngle;
+
+        int segments = 28;
+        for (int i = 0; i <= segments; i++)
+        {
+            float t = (float)i / segments;
+            float angle = centerAngle - arcSpan / 2f + arcSpan * t;
+
+            // Crescent shape: thickest at center, thin at tips
+            float crescentT = MathF.Sin(t * MathF.PI);
+            float currentThickness = thickness * crescentT;
+            if (currentThickness < 1.5f) currentThickness = 1.5f;
+
+            float outerR = outerRadius;
+            float innerR = outerRadius - currentThickness;
+
+            // Draw filled layers from inner to outer
+            int layers = (int)(currentThickness / 2.5f) + 1;
+            for (int layer = 0; layer < layers; layer++)
+            {
+                float lt = (float)layer / Math.Max(1, layers - 1);
+                float r = innerR + (outerR - innerR) * lt;
+                float px = Position.X + MathF.Cos(angle) * r;
+                float py = Position.Y + MathF.Sin(angle) * r;
+
+                // Core is bright white, edges are blue-tinted
+                float coreness = 1f - lt; // 1 at inner, 0 at outer
+                var coreColor = Color.Lerp(new Color(180, 220, 255), new Color(255, 250, 240), coreness);
+                float pixelSize = 3f + crescentT * 2f;
+
+                spriteBatch.Draw(pixel,
+                    new Rectangle((int)(px - pixelSize / 2), (int)(py - pixelSize / 2), (int)pixelSize + 1, (int)pixelSize + 1),
+                    coreColor * alpha * (0.6f + coreness * 0.4f));
+            }
+
+            // Outer edge glow (trailing sparkle)
+            if (crescentT > 0.2f)
+            {
+                float gx = Position.X + MathF.Cos(angle) * (outerR + 4f);
+                float gy = Position.Y + MathF.Sin(angle) * (outerR + 4f);
+                float glowPixSize = 3f * crescentT * alpha;
+                spriteBatch.Draw(pixel,
+                    new Rectangle((int)(gx - glowPixSize / 2), (int)(gy - glowPixSize / 2), (int)glowPixSize + 1, (int)glowPixSize + 1),
+                    new Color(200, 230, 255) * alpha * 0.5f);
+            }
+        }
+
+        // Bright leading edge (the "blade" of the crescent)
+        for (int i = 0; i <= segments; i++)
+        {
+            float t = (float)i / segments;
+            float angle = centerAngle - arcSpan / 2f + arcSpan * t;
+            float crescentT = MathF.Sin(t * MathF.PI);
+            if (crescentT < 0.15f) continue;
+
+            float px = Position.X + MathF.Cos(angle) * outerRadius;
+            float py = Position.Y + MathF.Sin(angle) * outerRadius;
+            float edgeSize = 2f + crescentT;
+            spriteBatch.Draw(pixel,
+                new Rectangle((int)(px - edgeSize / 2), (int)(py - edgeSize / 2), (int)edgeSize + 1, (int)edgeSize + 1),
+                Color.White * alpha * 0.7f * crescentT);
+        }
     }
 }
 

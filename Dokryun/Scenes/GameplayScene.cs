@@ -82,6 +82,22 @@ public class GameplayScene : Scene
     private Color _screenFlashColor;
     private float _vignetteIntensity;
 
+    // Trailing HP bars (modern delayed-damage effect)
+    private float _trailingHP;
+    private float _trailingBossHP;
+    private float _prevPlayerHP;
+    private float _prevBossHP;
+
+    // Cached HUD strings
+    private string _cachedSlotText;
+    private int _cachedSlotCount = -1;
+    private string _cachedComboText;
+    private int _cachedComboCount = -1;
+
+    // Reusable collections (avoid per-frame allocation)
+    private List<Entity> _drawOrder = new();
+    private List<Vector2> _minimapEnemyPositions = new();
+
     // Ghost trail
     private List<(Vector2 pos, float alpha, bool flipX)> _ghostTrails = new();
 
@@ -115,6 +131,10 @@ public class GameplayScene : Scene
         _enemies = new List<Enemy>();
         _camera = new Camera(GraphicsDevice.Viewport) { Zoom = 1.5f };
 
+        // Continue BGM from Chungcheong village
+        AudioManager.LoadBgm(Content, "chungcheong", "Audio/section_1");
+        AudioManager.PlayBgm("chungcheong");
+
         _particles = new ParticleSystem(3000);
         _damageNumbers = new DamageNumberSystem();
         _projectiles = new ProjectileManager();
@@ -122,6 +142,15 @@ public class GameplayScene : Scene
         _droppedItems = new List<DroppedItem>();
         _inventory = new Inventory();
         _dungeonObjects = new List<DungeonObject>();
+
+        // Apply initial meteorite choice
+        if (Game1.InitialMeteoriteId.HasValue)
+        {
+            _inventory.TryAdd(Game1.InitialMeteoriteId.Value);
+            _inventory.RecalculateStats(_augmentStats);
+            _player.FlameSlash = _augmentStats.ExplosiveFlame;
+            Game1.InitialMeteoriteId = null;
+        }
 
         _floor = 0;
         _totalKills = 0;
@@ -134,6 +163,9 @@ public class GameplayScene : Scene
 
         _state = GameState.FloorTransition;
         _floorTransitionTimer = 2f;
+
+        _trailingHP = 100f;
+        _prevPlayerHP = 100f;
 
         GenerateFloor();
     }
@@ -186,6 +218,8 @@ public class GameplayScene : Scene
                 _boss.MaxHP = (int)(_boss.MaxHP * bossScale);
                 _boss.HP = _boss.MaxHP;
                 _boss.Attack *= bossScale;
+                _trailingBossHP = _boss.MaxHP;
+                _prevBossHP = _boss.MaxHP;
                 _enemies.Add(_boss);
             }
             _floorEnemyCount = 1;
@@ -246,6 +280,7 @@ public class GameplayScene : Scene
     {
         float dt = (float)gameTime.ElapsedGameTime.TotalSeconds;
         _gameTimer += dt;
+        Player.GameTime = _gameTimer;
 
         if (_hitStopTimer > 0)
         {
@@ -257,6 +292,26 @@ public class GameplayScene : Scene
         float effectiveDt = dt * _camera.TimeScale;
 
         if (_screenFlashTimer > 0) _screenFlashTimer -= dt;
+
+        // Trailing HP bars - smooth delayed catch-up
+        if (_player.HP < _prevPlayerHP)
+            _prevPlayerHP = _player.HP; // HP decreased, trailing bar starts catching up
+        else
+            _trailingHP = _player.HP; // HP increased (heal), snap trailing bar
+        _trailingHP = MathHelper.Lerp(_trailingHP, _player.HP, dt * 3f);
+        if (MathF.Abs(_trailingHP - _player.HP) < 0.5f) _trailingHP = _player.HP;
+        _prevPlayerHP = _player.HP;
+
+        if (_boss != null && !_bossDefeated)
+        {
+            if (_boss.HP < _prevBossHP)
+                _prevBossHP = _boss.HP;
+            else
+                _trailingBossHP = _boss.HP;
+            _trailingBossHP = MathHelper.Lerp(_trailingBossHP, _boss.HP, dt * 2.5f);
+            if (MathF.Abs(_trailingBossHP - _boss.HP) < 1f) _trailingBossHP = _boss.HP;
+            _prevBossHP = _boss.HP;
+        }
 
         _particles.Update(effectiveDt);
         _damageNumbers.Update(effectiveDt);
@@ -356,7 +411,7 @@ public class GameplayScene : Scene
         }
 
         // Player attack
-        if (InputManager.IsLeftHeld() && _player.CanAttack())
+        if (InputManager.IsLeftHeld() && _player.CanAttack() && _player.Ki >= 3f)
         {
             float effectiveFireRate = _augmentStats.FireRateMultiplier;
             // Berserker resonance: 1.5x if below 40% HP
@@ -390,16 +445,18 @@ public class GameplayScene : Scene
             if (!enemy.IsActive) continue;
             if (!enemy.IsDeathAnimating)
             {
-                float dist = Vector2.Distance(enemy.Position, _player.Position);
-
-                // Aggro check
-                if (!enemy.IsAggro && dist < enemy.AggroRange)
+                // Aggro check (use DistanceSquared to avoid sqrt)
+                if (!enemy.IsAggro)
                 {
-                    if (_tileMap.HasLineOfSight(enemy.Position, _player.Position))
+                    float distSq = Vector2.DistanceSquared(enemy.Position, _player.Position);
+                    if (distSq < enemy.AggroRange * enemy.AggroRange)
                     {
-                        enemy.IsAggro = true;
-                        // Alert particle
-                        _particles.EmitBurst(enemy.Position + new Vector2(0, -15), 4, new Color(255, 200, 50), 60f, 0.2f, 1.5f);
+                        if (_tileMap.HasLineOfSight(enemy.Position, _player.Position))
+                        {
+                            enemy.IsAggro = true;
+                            // Alert particle
+                            _particles.EmitBurst(enemy.Position + new Vector2(0, -15), 4, new Color(255, 200, 50), 60f, 0.2f, 1.5f);
+                        }
                     }
                 }
 
@@ -595,10 +652,10 @@ public class GameplayScene : Scene
         if (_isBossFloor && _boss != null && _boss.IsDead && !_bossDefeated)
         {
             _bossDefeated = true;
-            _particles.EmitExplosion(_boss.Position, 60, new Color(50, 200, 80));
-            _particles.EmitImpactRing(_boss.Position, new Color(255, 220, 100), 80f, 30);
+            _particles.EmitExplosion(_boss.Position, 30, new Color(50, 200, 80));
+            _particles.EmitImpactRing(_boss.Position, new Color(255, 220, 100), 80f, 20);
             FlashScreen(new Color(255, 220, 100), 0.3f);
-            _hitStopTimer = 0.15f;
+            _hitStopTimer = 0.08f;
             AudioManager.Play("boss_roar", 1f, 0f);
             AudioManager.Play("explosion", 0.9f, -0.1f);
             _camera.Shake(8f, 0.25f);
@@ -711,6 +768,7 @@ public class GameplayScene : Scene
                     bool wasBerserker = _augmentStats.SynergyBerserkerResonance;
 
                     _inventory.RecalculateStats(_augmentStats);
+                    _player.FlameSlash = _augmentStats.ExplosiveFlame;
 
                     // Check for newly activated synergies
                     if (!wasFocus && _augmentStats.SynergyFocusResonance)
@@ -761,7 +819,7 @@ public class GameplayScene : Scene
         // Player death
         if (_player.IsDead)
         {
-            _particles.EmitExplosion(_player.Position, 50, new Color(200, 160, 80));
+            _particles.EmitExplosion(_player.Position, 25, new Color(200, 160, 80));
             _particles.EmitImpactRing(_player.Position, new Color(255, 200, 100), 60f);
             AudioManager.Play("player_hit", 1f, -0.2f);
             AudioManager.Play("explosion", 0.6f, 0.1f);
@@ -1775,10 +1833,10 @@ public class GameplayScene : Scene
         {
             // MASSIVE explosion
             float radius = 130f;
-            _particles.EmitExplosion(boss.Position, 60, new Color(255, 200, 50));
-            _particles.EmitImpactRing(boss.Position, new Color(255, 180, 30), radius, 32);
-            _particles.EmitImpactRing(boss.Position, new Color(255, 100, 20), radius * 0.7f, 24);
-            _particles.EmitExplosion(boss.Position, 40, new Color(255, 100, 30));
+            _particles.EmitExplosion(boss.Position, 25, new Color(255, 200, 50));
+            _particles.EmitImpactRing(boss.Position, new Color(255, 180, 30), radius, 20);
+            _particles.EmitImpactRing(boss.Position, new Color(255, 100, 20), radius * 0.7f, 16);
+            _particles.EmitExplosion(boss.Position, 20, new Color(255, 100, 30));
 
             // Shockwave projectiles in all directions
             for (int i = 0; i < 16; i++)
@@ -1798,11 +1856,11 @@ public class GameplayScene : Scene
                 TryDamagePlayer(boss.Attack * 2f * falloff, kbDir, 400f);
             }
 
-            _hitStopTimer = 0.15f;
-            FlashScreen(Color.White, 0.25f);
+            _hitStopTimer = 0.08f;
+            FlashScreen(Color.White, 0.2f);
             AudioManager.Play("explosion", 1f, -0.15f);
             AudioManager.Play("boss_stomp", 0.9f, -0.2f);
-            _camera.Shake(10f, 0.3f);
+            _camera.Shake(8f, 0.25f);
             _camera.ImpactZoom(0.06f);
 
             boss.BossState = BossAttackState.Idle;
@@ -2036,6 +2094,9 @@ public class GameplayScene : Scene
 
     private void SwordSlash()
     {
+        // Ki consumption per attack
+        _player.Ki = Math.Max(0, _player.Ki - 3f);
+
         var mouseWorld = GetMouseWorldPosition();
         var aimDir = mouseWorld - _player.Position;
         if (aimDir.LengthSquared() > 0) aimDir.Normalize();
@@ -2069,6 +2130,7 @@ public class GameplayScene : Scene
 
         // Slash particles (more on stronger hits)
         int slashParticles = combo switch { 1 => 8, 2 => 12, _ => 20 };
+        if (_augmentStats.ExplosiveFlame) slashParticles = (int)(slashParticles * 1.5f);
         for (int i = 0; i < slashParticles; i++)
         {
             float t = (float)i / slashParticles;
@@ -2076,8 +2138,18 @@ public class GameplayScene : Scene
             float dist = range * (0.6f + 0.4f * t);
             var pos = _player.Position + new Vector2(MathF.Cos(angle), MathF.Sin(angle)) * dist;
             var vel = new Vector2(MathF.Cos(angle), MathF.Sin(angle)) * (40f + combo * 20f);
-            var slashColor = combo == 3 ? new Color(255, 240, 180) : new Color(255, 245, 220);
-            _particles.Emit(pos, vel, slashColor, 0.15f + 0.05f * t, 2f + combo);
+
+            if (_augmentStats.ExplosiveFlame)
+            {
+                var fireColor = Color.Lerp(new Color(255, 80, 10), new Color(255, 200, 40), (float)Random.Shared.NextDouble());
+                _particles.Emit(pos, vel * 1.5f + new Vector2(0, -30f * (float)Random.Shared.NextDouble()), fireColor,
+                    0.25f + 0.1f * t, 3f + combo * 1.5f, 60f);
+            }
+            else
+            {
+                var slashColor = combo == 3 ? new Color(255, 240, 180) : new Color(255, 245, 220);
+                _particles.Emit(pos, vel, slashColor, 0.15f + 0.05f * t, 2f + combo);
+            }
         }
 
         // Damage enemies in arc (generous: matches visual crescent)
@@ -2119,8 +2191,7 @@ public class GameplayScene : Scene
             // ExplosiveFlame (폭발): fire explosion on hit
             if (_augmentStats.ExplosiveFlame)
             {
-                PerformExplosion(enemy.Position, dmg * 0.3f, 45f, new Color(255, 120, 40));
-                _particles.EmitBurst(enemy.Position, 8, new Color(255, 100, 30), 100f, 0.2f, 3f);
+                PerformFireExplosion(enemy.Position, dmg * 0.3f, 55f);
             }
 
             // CritLightning (번개): chain lightning on crit
@@ -2132,25 +2203,27 @@ public class GameplayScene : Scene
         }
 
         // 3rd combo: screen shake + impact zoom
-        if (combo == 3 && hitCount > 0)
+        if (combo == 3)
         {
             _camera.Shake(5f, 0.15f);
             _camera.ImpactZoom(0.03f);
         }
 
-        // CrescentWave (초승): 3rd hit fires a crescent projectile
-        if (combo == 3 && _augmentStats.CrescentWave && hitCount > 0)
+        // CrescentWave (초승): 3rd hit fires a crescent sword energy
+        if (combo == 3 && _augmentStats.CrescentWave)
         {
             var proj = _projectiles.SpawnPlayerArrow(
-                _player.Position + aimDir * 25f, aimDir,
-                baseDamage * 0.8f, 300f, 8f, new Color(220, 240, 255));
-            proj.PierceRemaining = 5;
-            proj.Life = 0.8f;
-            _particles.EmitDirectionalSpark(_player.Position + aimDir * 20f, aimDir, 10, new Color(200, 230, 255), 200f);
+                _player.Position + aimDir * 30f, aimDir,
+                baseDamage * 0.8f, 1040f, 22f, new Color(200, 230, 255));
+            proj.PierceRemaining = 8;
+            proj.Life = 2.0f;
+            proj.IsCrescent = true;
+            proj.InitialLife = proj.Life;
+            _particles.EmitDirectionalSpark(_player.Position + aimDir * 20f, aimDir, 18, new Color(180, 220, 255), 250f);
         }
 
         // GroundCrack (균열): 3rd hit creates delayed explosion
-        if (combo == 3 && _augmentStats.GroundCrack && hitCount > 0)
+        if (combo == 3 && _augmentStats.GroundCrack)
         {
             var crackPos = _player.Position + aimDir * range * 0.6f;
             float crackDmg = baseDamage;
@@ -2159,7 +2232,7 @@ public class GameplayScene : Scene
         }
 
         // WindBurst (바람): 3rd hit activates 5s attack speed buff
-        if (combo == 3 && _augmentStats.WindBurst && hitCount > 0)
+        if (combo == 3 && _augmentStats.WindBurst)
         {
             float windDuration = 5f;
             if (_augmentStats.SynergyBerserkerResonance && _player.HP < (_player.MaxHP + _augmentStats.MaxHPBonus) * 0.4f)
@@ -2442,6 +2515,26 @@ public class GameplayScene : Scene
         }
     }
 
+    private void PerformFireExplosion(Vector2 position, float damage, float radius)
+    {
+        _particles.EmitFireExplosion(position, radius);
+        FlashScreen(new Color(255, 100, 20), 0.06f);
+        _camera.Shake(5f, 0.12f);
+        _camera.ImpactZoom(0.02f);
+        AudioManager.Play("explosion", 0.8f, 0.05f, 0.06f);
+
+        foreach (var enemy in _enemies)
+        {
+            if (!enemy.IsActive || enemy.IsDead) continue;
+            if (Vector2.Distance(enemy.Position, position) < radius)
+            {
+                enemy.TakeDamage(damage);
+                _damageNumbers.Spawn(enemy.Position, damage, false);
+                enemy.ApplyKnockback(enemy.Position - position, 200f);
+            }
+        }
+    }
+
     private Enemy FindNearestEnemy(Vector2 position, float maxDist, Enemy exclude)
     {
         Enemy nearest = null;
@@ -2462,22 +2555,24 @@ public class GameplayScene : Scene
     private void DrawItemPickupNotification(SpriteBatch spriteBatch)
     {
         float alpha = Math.Min(1f, _itemPickupTimer);
-        float slideUp = (1f - alpha) * 20f;
-        float scale = 0.9f;
+        // Slide in from right
+        float slideIn = MathF.Min(1f, _itemPickupTimer / 0.3f);
+        float offsetX = (1f - slideIn) * 60f;
+        float scale = 0.85f;
         string text = SanitizeForFont(Fonts.Game, _itemPickupText);
         var size = Fonts.Game.MeasureString(text);
-        var pos = new Vector2(Game1.ScreenWidth / 2f - size.X * scale / 2f, 90 - slideUp);
+        var pos = new Vector2(Game1.ScreenWidth / 2f - size.X * scale / 2f + offsetX, 90);
 
-        // Background
-        int boxW = (int)(size.X * scale) + 30;
-        int boxH = 34;
-        spriteBatch.Draw(_pixel, new Rectangle((int)pos.X - 15, (int)pos.Y - 6, boxW, boxH),
-            new Color(10, 8, 5) * alpha * 0.9f);
-        DrawRectOutline(spriteBatch, new Rectangle((int)pos.X - 15, (int)pos.Y - 6, boxW, boxH),
-            _itemPickupColor * alpha * 0.7f, 1);
+        // Background with accent
+        int boxW = (int)(size.X * scale) + 24;
+        int boxH = 30;
+        int bx = (int)pos.X - 12;
+        int by = (int)pos.Y - 5;
+        spriteBatch.Draw(_pixel, new Rectangle(bx, by, boxW, boxH), new Color(0, 0, 0) * alpha * 0.6f);
+        // Left accent bar
+        spriteBatch.Draw(_pixel, new Rectangle(bx, by, 2, boxH), _itemPickupColor * alpha * 0.8f);
 
-        // Shadow
-        spriteBatch.DrawString(Fonts.Game, text, pos + new Vector2(1, 1), new Color(0, 0, 0) * alpha * 0.8f,
+        spriteBatch.DrawString(Fonts.Game, text, pos + new Vector2(1, 1), new Color(0, 0, 0) * alpha * 0.7f,
             0, Vector2.Zero, scale, SpriteEffects.None, 0);
         spriteBatch.DrawString(Fonts.Game, text, pos, _itemPickupColor * alpha,
             0, Vector2.Zero, scale, SpriteEffects.None, 0);
@@ -2573,11 +2668,13 @@ public class GameplayScene : Scene
         DrawEnemyTelegraphs(spriteBatch);
 
         // 2.5D Y-sort
-        var drawOrder = new List<Entity> { _player };
-        drawOrder.AddRange(_enemies.Where(e => e.IsActive));
-        drawOrder.Sort((a, b) => a.Depth.CompareTo(b.Depth));
+        _drawOrder.Clear();
+        _drawOrder.Add(_player);
+        foreach (var e in _enemies)
+            if (e.IsActive) _drawOrder.Add(e);
+        _drawOrder.Sort((a, b) => a.Depth.CompareTo(b.Depth));
 
-        foreach (var entity in drawOrder)
+        foreach (var entity in _drawOrder)
         {
             if (entity is not Player)
                 DrawShadow(spriteBatch, entity.Position, 10);
@@ -2616,25 +2713,28 @@ public class GameplayScene : Scene
         if (_itemPickupTimer > 0 && _itemPickupText != null)
             DrawItemPickupNotification(spriteBatch);
 
-        // Synergy notifications
+        // Synergy notifications (slide-in from top)
         for (int i = 0; i < _synergyNotifications.Count; i++)
         {
             var notif = _synergyNotifications[i];
             float alpha = Math.Min(1f, notif.timer);
-            float slideUp = (1f - alpha) * 20f;
-            float scale = 1f;
+            float slideIn = MathF.Min(1f, notif.timer / 0.25f);
+            float offsetY = (1f - slideIn) * -30f;
+            float scale = 0.9f;
             string text = SanitizeForFont(Fonts.Game, notif.text);
             var size = Fonts.Game.MeasureString(text);
-            var pos = new Vector2(Game1.ScreenWidth / 2f - size.X * scale / 2f, 130 + i * 35 - slideUp);
+            var pos = new Vector2(Game1.ScreenWidth / 2f - size.X * scale / 2f, 130 + i * 32 + offsetY);
 
-            int boxW = (int)(size.X * scale) + 30;
-            int boxH = 34;
-            spriteBatch.Draw(_pixel, new Rectangle((int)pos.X - 15, (int)pos.Y - 6, boxW, boxH),
-                new Color(10, 8, 5) * alpha * 0.9f);
-            DrawRectOutline(spriteBatch, new Rectangle((int)pos.X - 15, (int)pos.Y - 6, boxW, boxH),
-                notif.color * alpha * 0.7f, 1);
+            int boxW = (int)(size.X * scale) + 24;
+            int boxH = 28;
+            int bx = (int)pos.X - 12;
+            int by = (int)pos.Y - 4;
+            spriteBatch.Draw(_pixel, new Rectangle(bx, by, boxW, boxH), new Color(0, 0, 0) * alpha * 0.6f);
+            // Accent line
+            spriteBatch.Draw(_pixel, new Rectangle(bx, by, 2, boxH), notif.color * alpha * 0.8f);
+            spriteBatch.Draw(_pixel, new Rectangle(bx, by + boxH - 1, boxW, 1), notif.color * alpha * 0.2f);
 
-            spriteBatch.DrawString(Fonts.Game, text, pos + new Vector2(1, 1), new Color(0, 0, 0) * alpha * 0.8f,
+            spriteBatch.DrawString(Fonts.Game, text, pos + new Vector2(1, 1), new Color(0, 0, 0) * alpha * 0.7f,
                 0, Vector2.Zero, scale, SpriteEffects.None, 0);
             spriteBatch.DrawString(Fonts.Game, text, pos, notif.color * alpha,
                 0, Vector2.Zero, scale, SpriteEffects.None, 0);
@@ -2817,53 +2917,85 @@ public class GameplayScene : Scene
     private void DrawCombo(SpriteBatch spriteBatch)
     {
         float alpha = Math.Min(1f, _comboTimer / 0.3f);
-        float scale = 0.8f + _comboCount * 0.05f;
-        scale = Math.Min(scale, 1.4f);
-        float pulse = MathF.Sin(_gameTimer * 8f) * 0.1f;
-        scale += pulse;
+        float baseScale = 0.9f + _comboCount * 0.04f;
+        baseScale = Math.Min(baseScale, 1.5f);
+        // Pop-in effect on new combo hit
+        float popIn = _comboTimer > ComboWindow - 0.15f ? (1f + (_comboTimer - (ComboWindow - 0.15f)) / 0.15f * 0.2f) : 1f;
+        float scale = baseScale * popIn;
 
-        string comboText = $"{_comboCount} 연타";
+        if (_cachedComboCount != _comboCount)
+        {
+            _cachedComboCount = _comboCount;
+            _cachedComboText = $"{_comboCount} 연타";
+        }
+        string comboText = _cachedComboText;
         var size = Fonts.Game.MeasureString(comboText);
-        var pos = new Vector2(Game1.ScreenWidth / 2f - size.X * scale / 2f, 60);
+
+        // Right-aligned, below floor indicator
+        float posX = Game1.ScreenWidth - 20 - size.X * scale;
+        float posY = 42;
+        var pos = new Vector2(posX, posY);
 
         Color comboColor;
-        if (_comboCount >= 10) comboColor = new Color(255, 50, 50);
-        else if (_comboCount >= 7) comboColor = new Color(255, 180, 50);
+        if (_comboCount >= 10) comboColor = new Color(255, 60, 60);
+        else if (_comboCount >= 7) comboColor = new Color(255, 190, 50);
         else if (_comboCount >= 4) comboColor = new Color(255, 220, 100);
         else comboColor = new Color(220, 200, 160);
 
-        spriteBatch.DrawString(Fonts.Game, comboText, pos + new Vector2(2, 2),
-            new Color(0, 0, 0) * alpha * 0.5f, 0, Vector2.Zero, scale, SpriteEffects.None, 0);
+        // Background pill
+        int pillW = (int)(size.X * scale) + 16;
+        int pillH = (int)(size.Y * scale) + 6;
+        spriteBatch.Draw(_pixel, new Rectangle((int)posX - 8, (int)posY - 3, pillW, pillH), new Color(0, 0, 0) * alpha * 0.45f);
+
+        // Accent line
+        if (_comboCount >= 4)
+            spriteBatch.Draw(_pixel, new Rectangle((int)posX - 8, (int)posY - 3, 2, pillH), comboColor * alpha * 0.5f);
+
+        spriteBatch.DrawString(Fonts.Game, comboText, pos + new Vector2(1, 1),
+            new Color(0, 0, 0) * alpha * 0.6f, 0, Vector2.Zero, scale, SpriteEffects.None, 0);
         spriteBatch.DrawString(Fonts.Game, comboText, pos,
             comboColor * alpha, 0, Vector2.Zero, scale, SpriteEffects.None, 0);
     }
 
     private void DrawHUD(SpriteBatch spriteBatch)
     {
-        int m = 16;
+        // === Diablo-style Orbs (bottom-left) ===
+        int orbRadius = 34;
+        int orbSpacing = 20;
+        int orbY = Game1.ScreenHeight - orbRadius - 14;
+        int hpOrbX = orbRadius + 14;
+        int kiOrbX = hpOrbX + orbRadius * 2 + orbSpacing;
 
-        spriteBatch.DrawString(Fonts.Game, "체력", new Vector2(m, m - 2), new Color(180, 40, 40), 0, Vector2.Zero, 0.7f, SpriteEffects.None, 0);
-        DrawResourceBar(spriteBatch, m + 32, m,
-            _player.HP, _player.MaxHP + _augmentStats.MaxHPBonus,
-            new Color(180, 40, 40), new Color(220, 60, 60), new Color(40, 12, 12), 190, 14);
-        string hpText = $"{(int)_player.HP}/{(int)(_player.MaxHP + _augmentStats.MaxHPBonus)}";
-        spriteBatch.DrawString(Fonts.Game, hpText, new Vector2(m + 36, m - 1), new Color(220, 200, 180), 0, Vector2.Zero, 0.6f, SpriteEffects.None, 0);
+        float maxHP = _player.MaxHP + _augmentStats.MaxHPBonus;
 
-        spriteBatch.DrawString(Fonts.Game, "기력", new Vector2(m, m + 18), new Color(50, 70, 180), 0, Vector2.Zero, 0.6f, SpriteEffects.None, 0);
-        DrawResourceBar(spriteBatch, m + 32, m + 20,
-            _player.Ki, _player.MaxKi,
-            new Color(50, 70, 180), new Color(70, 100, 220), new Color(12, 12, 40), 140, 10);
+        // HP Orb (red, left)
+        DrawOrb(spriteBatch, hpOrbX, orbY, orbRadius, _player.HP, _trailingHP, maxHP,
+            new Color(160, 20, 20), new Color(220, 40, 30), new Color(255, 80, 60),
+            new Color(120, 50, 30), new Color(30, 8, 8));
 
-        // Dash charges
-        int dashY = m + 36;
+        // Ki/MP Orb (blue, right)
+        DrawOrb(spriteBatch, kiOrbX, orbY, orbRadius - 4, _player.Ki, _player.Ki, _player.MaxKi,
+            new Color(20, 30, 160), new Color(40, 60, 220), new Color(80, 120, 255),
+            new Color(20, 30, 160), new Color(8, 8, 30));
+
+        // Dash charges between orbs
+        int dashCX = (hpOrbX + kiOrbX) / 2;
+        int dashCY = orbY + orbRadius - 6;
         for (int i = 0; i < Player.MaxDashCharges; i++)
         {
             bool filled = i < _player.DashCharges;
-            var dashColor = filled ? new Color(200, 180, 120) : new Color(50, 45, 35);
-            spriteBatch.Draw(_pixel, new Rectangle(m + i * 14, dashY, 10, 10), dashColor);
-            DrawRectOutline(spriteBatch, new Rectangle(m + i * 14, dashY, 10, 10), new Color(100, 90, 70), 1);
+            int dx = dashCX + (i - Player.MaxDashCharges / 2) * 14;
+            int dy = dashCY;
+            var dashColor = filled ? new Color(220, 200, 130) : new Color(40, 35, 28);
+            var dashBorder = filled ? new Color(255, 240, 160) : new Color(70, 60, 45);
+            spriteBatch.Draw(_pixel, new Rectangle(dx - 1, dy - 4, 3, 3), dashColor);
+            spriteBatch.Draw(_pixel, new Rectangle(dx - 3, dy - 2, 7, 3), dashColor);
+            spriteBatch.Draw(_pixel, new Rectangle(dx - 1, dy + 1, 3, 3), dashColor);
+            spriteBatch.Draw(_pixel, new Rectangle(dx, dy - 5, 1, 1), dashBorder);
+            spriteBatch.Draw(_pixel, new Rectangle(dx - 4, dy, 1, 1), dashBorder);
+            spriteBatch.Draw(_pixel, new Rectangle(dx + 4, dy, 1, 1), dashBorder);
+            spriteBatch.Draw(_pixel, new Rectangle(dx, dy + 4, 1, 1), dashBorder);
         }
-        spriteBatch.DrawString(Fonts.Game, "회피", new Vector2(m + Player.MaxDashCharges * 14 + 4, dashY - 1), new Color(150, 130, 100), 0, Vector2.Zero, 0.55f, SpriteEffects.None, 0);
 
         DrawFloorIndicator(spriteBatch);
         DrawKillCounter(spriteBatch);
@@ -2875,150 +3007,291 @@ public class GameplayScene : Scene
             DrawBossHPBar(spriteBatch);
     }
 
-    private void DrawResourceBar(SpriteBatch spriteBatch, int x, int y, float current, float max,
-        Color barColor, Color highlight, Color bgColor, int width, int height)
+    private void DrawOrb(SpriteBatch spriteBatch, int cx, int cy, int radius, float current, float trailing, float max,
+        Color darkColor, Color midColor, Color brightColor, Color trailColor, Color emptyColor)
     {
-        spriteBatch.Draw(_pixel, new Rectangle(x, y, width, height), bgColor);
         float ratio = Math.Clamp(current / max, 0, 1);
+        float trailRatio = Math.Clamp(trailing / max, 0, 1);
+        int r = radius;
+
+        // Outer decorative ring
+        DrawPixelCircleOutline(spriteBatch, cx, cy, r + 3, new Color(50, 42, 30), 2);
+        DrawPixelCircleOutline(spriteBatch, cx, cy, r + 1, new Color(90, 75, 50), 1);
+
+        // Fill the orb circle row by row (bottom-up fill based on ratio)
+        for (int py = -r; py <= r; py++)
+        {
+            // Half-width at this row
+            float hw = MathF.Sqrt(r * r - py * py);
+            int x0 = cx - (int)hw;
+            int w = (int)(hw * 2);
+            int screenY = cy + py;
+
+            // fillY: the Y threshold below which we fill (bottom-up)
+            // py ranges from -r (top) to +r (bottom)
+            // normalized: 0 at bottom (+r), 1 at top (-r)
+            float normalizedY = 1f - ((float)(py + r) / (r * 2));
+
+            if (normalizedY <= trailRatio && normalizedY > ratio)
+            {
+                // Trailing damage region
+                spriteBatch.Draw(_pixel, new Rectangle(x0, screenY, w, 1), trailColor * 0.5f);
+            }
+            else if (normalizedY <= ratio)
+            {
+                // Filled region - gradient from dark at bottom to bright at top
+                float fillNorm = ratio > 0 ? normalizedY / ratio : 0;
+                var rowColor = Color.Lerp(darkColor, midColor, fillNorm);
+
+                spriteBatch.Draw(_pixel, new Rectangle(x0, screenY, w, 1), rowColor);
+
+                // Bright highlight on upper portion of fill
+                if (fillNorm > 0.7f)
+                {
+                    float highlightAlpha = (fillNorm - 0.7f) / 0.3f * 0.4f;
+                    spriteBatch.Draw(_pixel, new Rectangle(x0, screenY, w, 1), brightColor * highlightAlpha);
+                }
+            }
+            else
+            {
+                // Empty region (above fluid level)
+                spriteBatch.Draw(_pixel, new Rectangle(x0, screenY, w, 1), emptyColor);
+            }
+        }
+
+        // Surface line (meniscus) - bright line at the fill level
+        if (ratio > 0.01f && ratio < 0.99f)
+        {
+            int surfaceY = cy + r - (int)(ratio * r * 2);
+            float surfHW = MathF.Sqrt(Math.Max(0, r * r - (surfaceY - cy) * (surfaceY - cy)));
+            int sx0 = cx - (int)(surfHW * 0.85f);
+            int sw = (int)(surfHW * 1.7f);
+            spriteBatch.Draw(_pixel, new Rectangle(sx0, surfaceY, sw, 1), brightColor * 0.7f);
+            spriteBatch.Draw(_pixel, new Rectangle(sx0 + 2, surfaceY - 1, sw - 4, 1), brightColor * 0.3f);
+        }
+
+        // Specular highlight (top-left)
+        DrawPixelCircleFilled(spriteBatch, cx - r / 3, cy - r / 3, r / 5, Color.White * 0.18f);
+        spriteBatch.Draw(_pixel, new Rectangle(cx - r / 3 - 1, cy - r / 3 - 1, 3, 2), Color.White * 0.3f);
+
+        // Numeric text centered below orb
+        string text = $"{(int)current}";
+        var textSize = Fonts.Game.MeasureString(text);
+        float textScale = 0.55f;
+        spriteBatch.DrawString(Fonts.Game, text,
+            new Vector2(cx - textSize.X * textScale / 2, cy + radius + 4),
+            Color.White * 0.85f, 0, Vector2.Zero, textScale, SpriteEffects.None, 0);
+    }
+
+    private void DrawPixelCircleOutline(SpriteBatch spriteBatch, int cx, int cy, int radius, Color color, int thickness)
+    {
+        for (int t = 0; t < thickness; t++)
+        {
+            int r = radius - t;
+            int segments = Math.Max(32, r * 4);
+            for (int i = 0; i < segments; i++)
+            {
+                float angle = MathHelper.TwoPi * i / segments;
+                int px = cx + (int)(MathF.Cos(angle) * r);
+                int py = cy + (int)(MathF.Sin(angle) * r);
+                spriteBatch.Draw(_pixel, new Rectangle(px, py, 1, 1), color);
+            }
+        }
+    }
+
+    private void DrawPixelCircleFilled(SpriteBatch spriteBatch, int cx, int cy, int radius, Color color)
+    {
+        for (int py = -radius; py <= radius; py++)
+        {
+            float hw = MathF.Sqrt(radius * radius - py * py);
+            spriteBatch.Draw(_pixel, new Rectangle(cx - (int)hw, cy + py, (int)(hw * 2), 1), color);
+        }
+    }
+
+    private void DrawResourceBarModern(SpriteBatch spriteBatch, int x, int y, float current, float trailing, float max,
+        Color barColor, Color highlight, Color trailColor, Color bgColor, int width, int height)
+    {
+        // Background with subtle inner shadow
+        spriteBatch.Draw(_pixel, new Rectangle(x, y, width, height), bgColor);
+        spriteBatch.Draw(_pixel, new Rectangle(x, y, width, 1), new Color(0, 0, 0) * 0.4f);
+
+        float ratio = Math.Clamp(current / max, 0, 1);
+        float trailRatio = Math.Clamp(trailing / max, 0, 1);
+
+        // Trailing bar (delayed damage indicator)
+        int trailW = (int)(width * trailRatio);
+        if (trailW > (int)(width * ratio))
+            spriteBatch.Draw(_pixel, new Rectangle(x, y, trailW, height), trailColor * 0.7f);
+
+        // Main fill
         int fillW = (int)(width * ratio);
         spriteBatch.Draw(_pixel, new Rectangle(x, y, fillW, height), barColor);
-        spriteBatch.Draw(_pixel, new Rectangle(x, y, fillW, 2), highlight);
-        DrawRectOutline(spriteBatch, new Rectangle(x, y, width, height), new Color(80, 70, 55), 1);
+
+        // Top highlight (gradient feel)
+        spriteBatch.Draw(_pixel, new Rectangle(x, y, fillW, Math.Max(1, height / 3)), highlight * 0.4f);
+        spriteBatch.Draw(_pixel, new Rectangle(x, y, fillW, 1), highlight * 0.6f);
+
+        // Bottom shadow
+        spriteBatch.Draw(_pixel, new Rectangle(x, y + height - 1, fillW, 1), new Color(0, 0, 0) * 0.3f);
+
+        // Subtle tick marks
         for (int i = 1; i < 4; i++)
-            spriteBatch.Draw(_pixel, new Rectangle(x + width * i / 4, y, 1, height), new Color(0, 0, 0) * 0.3f);
+            spriteBatch.Draw(_pixel, new Rectangle(x + width * i / 4, y, 1, height), new Color(0, 0, 0) * 0.2f);
+
+        // Border
+        DrawRectOutline(spriteBatch, new Rectangle(x - 1, y - 1, width + 2, height + 2), new Color(60, 55, 45), 1);
     }
 
     private void DrawBossHPBar(SpriteBatch spriteBatch)
     {
         int barW = 500;
-        int barH = 20;
+        int barH = 18;
         int x = (Game1.ScreenWidth - barW) / 2;
         int y = Game1.ScreenHeight - 55;
 
-        // Outer frame with decorative corners
-        spriteBatch.Draw(_pixel, new Rectangle(x - 4, y - 4, barW + 8, barH + 8), new Color(15, 12, 8));
+        // Outer frame panel
+        spriteBatch.Draw(_pixel, new Rectangle(x - 6, y - 6, barW + 12, barH + 12), new Color(0, 0, 0) * 0.7f);
+        spriteBatch.Draw(_pixel, new Rectangle(x - 2, y - 2, barW + 4, barH + 4), new Color(20, 16, 10));
 
-        // Background
-        spriteBatch.Draw(_pixel, new Rectangle(x - 2, y - 2, barW + 4, barH + 4), new Color(30, 22, 15));
-
-        // HP fill
+        // HP ratios
         float ratio = _boss.MaxHP > 0 ? Math.Clamp(_boss.HP / _boss.MaxHP, 0, 1) : 0;
+        float trailRatio = _boss.MaxHP > 0 ? Math.Clamp(_trailingBossHP / _boss.MaxHP, 0, 1) : 0;
         var hpColor = ratio > 0.5f ? new Color(50, 180, 70) : ratio > 0.25f ? new Color(200, 160, 40) : new Color(220, 40, 30);
 
-        // Phase 2: pulsing HP bar
+        // Phase 2: pulsing
         if (_boss.BossPhase >= 2)
         {
-            float pulse = MathF.Sin(_gameTimer * 6f) * 0.15f + 0.85f;
+            float pulse = MathF.Sin(_gameTimer * 6f) * 0.12f + 0.88f;
             hpColor = Color.Lerp(hpColor, new Color(255, 60, 30), 0.3f) * pulse;
         }
 
+        // Trailing bar
+        int trailW = (int)(barW * trailRatio);
         int fillW = (int)(barW * ratio);
+        if (trailW > fillW)
+            spriteBatch.Draw(_pixel, new Rectangle(x, y, trailW, barH), new Color(200, 120, 60) * 0.6f);
+
+        // Main fill
         spriteBatch.Draw(_pixel, new Rectangle(x, y, fillW, barH), hpColor);
 
-        // Highlight
-        spriteBatch.Draw(_pixel, new Rectangle(x, y, fillW, 3), Color.Lerp(hpColor, Color.White, 0.4f));
+        // Top highlight
+        spriteBatch.Draw(_pixel, new Rectangle(x, y, fillW, Math.Max(1, barH / 3)), Color.Lerp(hpColor, Color.White, 0.35f) * 0.5f);
+        spriteBatch.Draw(_pixel, new Rectangle(x, y, fillW, 1), Color.Lerp(hpColor, Color.White, 0.5f) * 0.6f);
         // Bottom shadow
-        spriteBatch.Draw(_pixel, new Rectangle(x, y + barH - 2, fillW, 2), hpColor * 0.5f);
+        spriteBatch.Draw(_pixel, new Rectangle(x, y + barH - 1, fillW, 1), new Color(0, 0, 0) * 0.4f);
 
-        // Phase markers at 60% and 30%
+        // Phase markers
         int mark60 = x + (int)(barW * 0.6f);
         int mark30 = x + (int)(barW * 0.3f);
-        spriteBatch.Draw(_pixel, new Rectangle(mark60, y - 2, 2, barH + 4), new Color(200, 200, 200) * 0.4f);
-        spriteBatch.Draw(_pixel, new Rectangle(mark30, y - 2, 2, barH + 4), new Color(255, 100, 50) * 0.5f);
+        spriteBatch.Draw(_pixel, new Rectangle(mark60, y - 1, 1, barH + 2), new Color(255, 255, 255) * 0.2f);
+        spriteBatch.Draw(_pixel, new Rectangle(mark30, y - 1, 1, barH + 2), new Color(255, 150, 80) * 0.3f);
 
         // Border
         var borderColor = _boss.BossPhase >= 2 ? new Color(200, 60, 40) :
-                          _boss.BossPhase >= 1 ? new Color(150, 120, 50) : new Color(100, 80, 50);
-        DrawRectOutline(spriteBatch, new Rectangle(x - 4, y - 4, barW + 8, barH + 8), borderColor, 1);
-        DrawRectOutline(spriteBatch, new Rectangle(x - 2, y - 2, barW + 4, barH + 4), borderColor * 0.7f, 1);
+                          _boss.BossPhase >= 1 ? new Color(160, 130, 60) : new Color(90, 75, 50);
+        DrawRectOutline(spriteBatch, new Rectangle(x - 2, y - 2, barW + 4, barH + 4), borderColor, 1);
 
-        // Decorative corner dots
-        int dotSize = 4;
-        spriteBatch.Draw(_pixel, new Rectangle(x - 6, y - 6, dotSize, dotSize), borderColor);
-        spriteBatch.Draw(_pixel, new Rectangle(x + barW + 2, y - 6, dotSize, dotSize), borderColor);
-        spriteBatch.Draw(_pixel, new Rectangle(x - 6, y + barH + 2, dotSize, dotSize), borderColor);
-        spriteBatch.Draw(_pixel, new Rectangle(x + barW + 2, y + barH + 2, dotSize, dotSize), borderColor);
+        // Decorative end caps
+        spriteBatch.Draw(_pixel, new Rectangle(x - 5, y + barH / 2 - 1, 3, 3), borderColor);
+        spriteBatch.Draw(_pixel, new Rectangle(x + barW + 2, y + barH / 2 - 1, 3, 3), borderColor);
 
         // Boss name
         string bossName = SanitizeForFont(Fonts.Game, _currentStage.BossName);
         var nameSize = Fonts.Game.MeasureString(bossName);
-        float nameScale = 0.7f;
-        var namePos = new Vector2(Game1.ScreenWidth / 2f - nameSize.X * nameScale / 2f, y - 26);
-        // Shadow
+        float nameScale = 0.75f;
+        var namePos = new Vector2(Game1.ScreenWidth / 2f - nameSize.X * nameScale / 2f, y - 28);
         spriteBatch.DrawString(Fonts.Game, bossName, namePos + new Vector2(1, 1),
-            new Color(10, 8, 5), 0, Vector2.Zero, nameScale, SpriteEffects.None, 0);
+            new Color(0, 0, 0) * 0.8f, 0, Vector2.Zero, nameScale, SpriteEffects.None, 0);
         var nameColor = _boss.BossPhase >= 2 ? new Color(255, 120, 80) :
-                        _boss.BossPhase >= 1 ? new Color(255, 220, 120) : new Color(220, 190, 120);
+                        _boss.BossPhase >= 1 ? new Color(255, 220, 120) : new Color(220, 195, 140);
         spriteBatch.DrawString(Fonts.Game, bossName, namePos,
             nameColor, 0, Vector2.Zero, nameScale, SpriteEffects.None, 0);
 
-        // Phase text
+        // Phase indicator (compact badge style)
         if (_boss.BossPhase >= 1)
         {
             string phaseText = _boss.BossPhase >= 2 ? "광폭화" : "2단계";
-            var phaseSize = Fonts.Game.MeasureString(phaseText);
             float phaseScale = 0.5f;
-            float phaseAlpha = MathF.Sin(_gameTimer * 4f) * 0.2f + 0.8f;
-            var phaseColor = _boss.BossPhase >= 2 ? new Color(255, 80, 40) * phaseAlpha : new Color(200, 200, 80) * phaseAlpha;
+            var phaseSize = Fonts.Game.MeasureString(phaseText);
+            float phaseAlpha = MathF.Sin(_gameTimer * 4f) * 0.15f + 0.85f;
+            var phaseColor = _boss.BossPhase >= 2 ? new Color(255, 80, 40) : new Color(220, 200, 80);
+            float badgeX = Game1.ScreenWidth / 2f + nameSize.X * nameScale / 2f + 8;
+            float badgeY = y - 25;
+            // Badge background
+            int badgeW = (int)(phaseSize.X * phaseScale) + 8;
+            spriteBatch.Draw(_pixel, new Rectangle((int)badgeX - 4, (int)badgeY - 1, badgeW, 16), new Color(0, 0, 0) * 0.5f);
+            DrawRectOutline(spriteBatch, new Rectangle((int)badgeX - 4, (int)badgeY - 1, badgeW, 16), phaseColor * phaseAlpha * 0.6f, 1);
             spriteBatch.DrawString(Fonts.Game, phaseText,
-                new Vector2(Game1.ScreenWidth / 2f + nameSize.X * nameScale / 2f + 8, y - 22),
-                phaseColor, 0, Vector2.Zero, phaseScale, SpriteEffects.None, 0);
+                new Vector2(badgeX, badgeY + 1),
+                phaseColor * phaseAlpha, 0, Vector2.Zero, phaseScale, SpriteEffects.None, 0);
         }
     }
 
     private void DrawFloorIndicator(SpriteBatch spriteBatch)
     {
         int cx = Game1.ScreenWidth / 2;
-        int y = 10;
-        int frameW = 160;
-        int frameH = 26;
-        var frameColor = new Color(80, 65, 45);
-        var rect = new Rectangle(cx - frameW / 2, y, frameW, frameH);
-        spriteBatch.Draw(_pixel, rect, new Color(20, 16, 12) * 0.8f);
-        DrawRectOutline(spriteBatch, rect, frameColor, 1);
+        int y = 8;
+        int frameW = 170;
+        int frameH = 28;
 
-        spriteBatch.Draw(_pixel, new Rectangle(cx - frameW / 2 - 20, y + frameH / 2, 18, 1), frameColor * 0.6f);
-        spriteBatch.Draw(_pixel, new Rectangle(cx + frameW / 2 + 2, y + frameH / 2, 18, 1), frameColor * 0.6f);
+        // Background panel
+        spriteBatch.Draw(_pixel, new Rectangle(cx - frameW / 2, y, frameW, frameH), new Color(0, 0, 0) * 0.5f);
 
+        // Floor text
         string floorText = $"지하 {_floor}층";
         var floorSize = Fonts.Game.MeasureString(floorText);
         spriteBatch.DrawString(Fonts.Game, floorText,
-            new Vector2(cx - floorSize.X * 0.7f / 2f, y + 2),
-            new Color(220, 190, 120), 0, Vector2.Zero, 0.7f, SpriteEffects.None, 0);
+            new Vector2(cx - floorSize.X * 0.7f / 2f, y + 3),
+            new Color(230, 205, 140), 0, Vector2.Zero, 0.7f, SpriteEffects.None, 0);
 
-        // Kill progress bar
-        int barW = (int)(frameW * 0.7f);
+        // Kill progress bar (thin, modern)
+        int barW = frameW - 20;
         int barX = cx - barW / 2;
-        int barY = y + frameH - 6;
+        int barY = y + frameH - 5;
         float progress = _floorEnemyCount > 0 ? Math.Min(1f, (float)_floorKills / _floorEnemyCount) : 0;
-        spriteBatch.Draw(_pixel, new Rectangle(barX, barY, barW, 3), new Color(30, 25, 18));
-        var barColor = _portalActive ? new Color(80, 200, 220) : new Color(220, 190, 100);
-        spriteBatch.Draw(_pixel, new Rectangle(barX, barY, (int)(barW * progress), 3), barColor);
+        spriteBatch.Draw(_pixel, new Rectangle(barX, barY, barW, 2), new Color(255, 255, 255) * 0.08f);
+        var barColor = _portalActive ? new Color(100, 220, 240) : new Color(220, 195, 110);
+        int fillW = (int)(barW * progress);
+        spriteBatch.Draw(_pixel, new Rectangle(barX, barY, fillW, 2), barColor);
+        // Glow tip
+        if (fillW > 2 && !_portalActive)
+            spriteBatch.Draw(_pixel, new Rectangle(barX + fillW - 2, barY - 1, 3, 4), barColor * 0.5f);
+
+        // Decorative side lines
+        var lineColor = new Color(200, 170, 100) * 0.2f;
+        spriteBatch.Draw(_pixel, new Rectangle(cx - frameW / 2 - 16, y + frameH / 2, 14, 1), lineColor);
+        spriteBatch.Draw(_pixel, new Rectangle(cx + frameW / 2 + 2, y + frameH / 2, 14, 1), lineColor);
     }
 
     private void DrawKillCounter(SpriteBatch spriteBatch)
     {
         string killText = $"처치 {_totalKills}";
         var killSize = Fonts.Game.MeasureString(killText);
+        float kx = Game1.ScreenWidth - killSize.X * 0.65f - 16;
+        // Subtle background
+        int bgW = (int)(killSize.X * 0.65f) + 12;
+        spriteBatch.Draw(_pixel, new Rectangle((int)kx - 6, 10, bgW, 20), new Color(0, 0, 0) * 0.3f);
         spriteBatch.DrawString(Fonts.Game, killText,
-            new Vector2(Game1.ScreenWidth - killSize.X * 0.7f - 16, 14),
-            new Color(150, 130, 100), 0, Vector2.Zero, 0.7f, SpriteEffects.None, 0);
+            new Vector2(kx, 12),
+            new Color(170, 155, 120), 0, Vector2.Zero, 0.65f, SpriteEffects.None, 0);
     }
 
     private void DrawCollectedItemIcons(SpriteBatch spriteBatch)
     {
         int x = 16;
-        int y = Game1.ScreenHeight - 42;
-        int iconSize = 24;
-        int gap = 4;
+        int y = Game1.ScreenHeight - 44;
+        int iconSize = 26;
+        int gap = 3;
 
         var items = _inventory.GetSortedItems();
 
-        // Background bar
+        // Background panel
         if (items.Count > 0)
         {
-            int barW = items.Count * (iconSize + gap) + 8;
-            spriteBatch.Draw(_pixel, new Rectangle(x - 4, y - 4, barW, iconSize + 8), new Color(0, 0, 0) * 0.4f);
+            int barW = items.Count * (iconSize + gap) + 10;
+            spriteBatch.Draw(_pixel, new Rectangle(x - 5, y - 5, barW, iconSize + 10), new Color(0, 0, 0) * 0.35f);
+            // Top accent line
+            spriteBatch.Draw(_pixel, new Rectangle(x - 5, y - 5, barW, 1), new Color(200, 170, 100) * 0.15f);
         }
 
         for (int i = 0; i < items.Count && i < 20; i++)
@@ -3027,29 +3300,45 @@ public class GameplayScene : Scene
             var info = MeteoriteDatabase.Get(id);
             int ix = x + i * (iconSize + gap);
             var rect = new Rectangle(ix, y, iconSize, iconSize);
-            spriteBatch.Draw(_pixel, rect, new Color(20, 16, 12));
             var rarityColor = MeteoriteDatabase.RarityColor(info.Rarity);
-            DrawRectOutline(spriteBatch, rect, rarityColor * 0.9f, 1);
-            spriteBatch.Draw(_pixel, new Rectangle(ix + 4, y + 4, iconSize - 8, iconSize - 8), info.MainColor * 0.6f);
-            spriteBatch.Draw(_pixel, new Rectangle(ix + 7, y + 7, iconSize - 14, iconSize - 14), Color.White * 0.25f);
 
-            // Stack count with shadow
+            // Background
+            spriteBatch.Draw(_pixel, rect, new Color(15, 12, 8));
+
+            // Inner icon with color
+            spriteBatch.Draw(_pixel, new Rectangle(ix + 3, y + 3, iconSize - 6, iconSize - 6), info.MainColor * 0.5f);
+            spriteBatch.Draw(_pixel, new Rectangle(ix + 6, y + 6, iconSize - 12, iconSize - 12), Color.White * 0.2f);
+
+            // Rarity border (bottom accent for modern look)
+            spriteBatch.Draw(_pixel, new Rectangle(ix, y + iconSize - 2, iconSize, 2), rarityColor * 0.8f);
+            // Subtle full border
+            DrawRectOutline(spriteBatch, rect, rarityColor * 0.3f, 1);
+
+            // Unique item glow
+            if (!info.Stackable)
+                spriteBatch.Draw(_pixel, new Rectangle(ix - 1, y - 1, iconSize + 2, iconSize + 2), rarityColor * (0.08f + MathF.Sin(_gameTimer * 3f + i) * 0.04f));
+
+            // Stack count
             if (count > 1)
             {
                 string countStr = count.ToString();
                 spriteBatch.DrawString(Fonts.Game, countStr,
-                    new Vector2(ix + iconSize - 7, y + iconSize - 12) + Vector2.One,
-                    new Color(0, 0, 0) * 0.8f, 0, Vector2.Zero, 0.4f, SpriteEffects.None, 0);
+                    new Vector2(ix + iconSize - 8, y + iconSize - 13) + Vector2.One,
+                    new Color(0, 0, 0) * 0.9f, 0, Vector2.Zero, 0.4f, SpriteEffects.None, 0);
                 spriteBatch.DrawString(Fonts.Game, countStr,
-                    new Vector2(ix + iconSize - 7, y + iconSize - 12),
+                    new Vector2(ix + iconSize - 8, y + iconSize - 13),
                     Color.White, 0, Vector2.Zero, 0.4f, SpriteEffects.None, 0);
             }
         }
 
         // Slot count + hint
-        string slotText = SanitizeForFont(Fonts.Game, $"{_inventory.UsedSlots}/{Inventory.MaxSlots}  [I] 인벤토리");
-        DrawTextWithShadow(spriteBatch, Fonts.Game, slotText,
-            new Vector2(x, y - 18), new Color(180, 170, 140), 0.5f);
+        if (_cachedSlotCount != _inventory.UsedSlots)
+        {
+            _cachedSlotCount = _inventory.UsedSlots;
+            _cachedSlotText = SanitizeForFont(Fonts.Game, $"{_inventory.UsedSlots}/{Inventory.MaxSlots}  [I] 인벤토리");
+        }
+        DrawTextWithShadow(spriteBatch, Fonts.Game, _cachedSlotText,
+            new Vector2(x, y - 16), new Color(160, 150, 120), 0.5f);
     }
 
     private void DrawMinimap(SpriteBatch spriteBatch)
@@ -3059,9 +3348,15 @@ public class GameplayScene : Scene
         int x = Game1.ScreenWidth - mapSize - margin;
         int y = Game1.ScreenHeight - mapSize - margin;
 
+        // Background frame
+        spriteBatch.Draw(_pixel, new Rectangle(x - 3, y - 3, mapSize + 6, mapSize + 6), new Color(0, 0, 0) * 0.5f);
+        DrawRectOutline(spriteBatch, new Rectangle(x - 2, y - 2, mapSize + 4, mapSize + 4), new Color(80, 70, 50) * 0.4f, 1);
+
         var mapArea = new Rectangle(x, y, mapSize, mapSize);
-        var enemyPositions = _enemies.Where(e => e.IsActive && !e.IsDead).Select(e => e.Position).ToList();
-        _tileMap.DrawMinimap(spriteBatch, _pixel, mapArea, _player.Position, enemyPositions, _gameTimer);
+        _minimapEnemyPositions.Clear();
+        foreach (var e in _enemies)
+            if (e.IsActive && !e.IsDead) _minimapEnemyPositions.Add(e.Position);
+        _tileMap.DrawMinimap(spriteBatch, _pixel, mapArea, _player.Position, _minimapEnemyPositions, _gameTimer);
     }
 
     private void DrawFloorTransition(SpriteBatch spriteBatch)
@@ -3107,23 +3402,36 @@ public class GameplayScene : Scene
 
     private void DrawVignette(SpriteBatch spriteBatch, float intensity)
     {
-        float pulse = MathF.Sin(_gameTimer * 4f) * 0.15f;
+        float pulse = MathF.Sin(_gameTimer * 3.5f) * 0.1f;
         intensity += pulse;
-        intensity = Math.Clamp(intensity, 0, 0.8f);
+        intensity = Math.Clamp(intensity, 0, 0.7f);
 
-        var color = new Color(100, 10, 10) * intensity;
-        int border = 80;
-        for (int i = 0; i < border; i++)
+        var color = new Color(120, 15, 10) * intensity;
+        int border = 100;
+        int bands = 12;
+        int bandSize = border / bands;
+
+        // Top/bottom bands (wider coverage)
+        for (int i = 0; i < bands; i++)
         {
-            float a = (1f - i / (float)border) * intensity;
-            spriteBatch.Draw(_pixel, new Rectangle(0, i, Game1.ScreenWidth, 1), color * a);
-            spriteBatch.Draw(_pixel, new Rectangle(0, Game1.ScreenHeight - i, Game1.ScreenWidth, 1), color * a);
+            float t = (float)i / bands;
+            float a = (1f - t) * (1f - t) * intensity; // Quadratic falloff for smoother gradient
+            if (a < 0.01f) continue;
+            int y = i * bandSize;
+            int h = bandSize + 1;
+            spriteBatch.Draw(_pixel, new Rectangle(0, y, Game1.ScreenWidth, h), color * a);
+            spriteBatch.Draw(_pixel, new Rectangle(0, Game1.ScreenHeight - y - h, Game1.ScreenWidth, h), color * a);
         }
-        for (int i = 0; i < border; i++)
+        // Left/right bands
+        for (int i = 0; i < bands; i++)
         {
-            float a = (1f - i / (float)border) * intensity * 0.5f;
-            spriteBatch.Draw(_pixel, new Rectangle(i, 0, 1, Game1.ScreenHeight), color * a);
-            spriteBatch.Draw(_pixel, new Rectangle(Game1.ScreenWidth - i, 0, 1, Game1.ScreenHeight), color * a);
+            float t = (float)i / bands;
+            float a = (1f - t) * (1f - t) * intensity * 0.4f;
+            if (a < 0.01f) continue;
+            int x = i * bandSize;
+            int w = bandSize + 1;
+            spriteBatch.Draw(_pixel, new Rectangle(x, 0, w, Game1.ScreenHeight), color * a);
+            spriteBatch.Draw(_pixel, new Rectangle(Game1.ScreenWidth - x - w, 0, w, Game1.ScreenHeight), color * a);
         }
     }
 
@@ -3311,6 +3619,7 @@ public class GameplayScene : Scene
                         var (id, _) = items[_inventorySelectedSlot];
                         _inventory.RemoveAll(id);
                         _inventory.RecalculateStats(_augmentStats);
+                        _player.FlameSlash = _augmentStats.ExplosiveFlame;
                         _inventoryDestroyConfirm = false;
                         if (_inventorySelectedSlot >= _inventory.GetSortedItems().Count)
                             _inventorySelectedSlot = Math.Max(0, _inventory.GetSortedItems().Count - 1);
@@ -3346,10 +3655,12 @@ public class GameplayScene : Scene
         int panelX = (Game1.ScreenWidth - panelW) / 2;
         int panelY = (Game1.ScreenHeight - panelH) / 2;
 
-        // Panel background with layered borders
-        spriteBatch.Draw(_pixel, new Rectangle(panelX - 2, panelY - 2, panelW + 4, panelH + 4), new Color(60, 50, 30));
-        spriteBatch.Draw(_pixel, new Rectangle(panelX, panelY, panelW, panelH), new Color(20, 16, 10));
-        DrawRectOutline(spriteBatch, new Rectangle(panelX, panelY, panelW, panelH), new Color(120, 100, 60), 2);
+        // Panel background with modern layered style
+        spriteBatch.Draw(_pixel, new Rectangle(panelX - 4, panelY - 4, panelW + 8, panelH + 8), new Color(0, 0, 0) * 0.5f);
+        spriteBatch.Draw(_pixel, new Rectangle(panelX, panelY, panelW, panelH), new Color(18, 14, 9));
+        // Top accent line
+        spriteBatch.Draw(_pixel, new Rectangle(panelX, panelY, panelW, 2), new Color(200, 170, 90) * 0.5f);
+        DrawRectOutline(spriteBatch, new Rectangle(panelX, panelY, panelW, panelH), new Color(100, 85, 50), 1);
 
         // Tab buttons
         int tabW = 120;

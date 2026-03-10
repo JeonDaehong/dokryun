@@ -44,7 +44,7 @@ public class ReincarnationScene : Scene
         {
             _selectTimer -= dt;
             if (_selectTimer <= 0)
-                SceneManager.ChangeScene(new VillageScene());
+                SceneManager.ChangeScene(new MeteoriteSelectionScene());
             return;
         }
 
@@ -163,17 +163,25 @@ public class ReincarnationScene : Scene
     private void DrawClassCard(SpriteBatch spriteBatch, int cx, int cy, int cardW, int cardH,
         float alpha, bool isSelected, string name, string desc, Action<SpriteBatch, int, int, Color> drawIcon)
     {
-        var borderColor = isSelected ? new Color(200, 170, 100) * alpha : new Color(120, 100, 70) * alpha;
-        var bgColor = new Color(25, 20, 15) * alpha;
+        var borderColor = isSelected ? new Color(210, 180, 110) * alpha : new Color(90, 80, 55) * alpha;
+        var bgColor = isSelected ? new Color(30, 25, 18) * alpha : new Color(20, 16, 12) * alpha;
+
+        // Card shadow (selected cards lift up)
+        if (isSelected)
+            spriteBatch.Draw(_pixel, new Rectangle(cx + 2, cy + 3, cardW, cardH), new Color(0, 0, 0) * alpha * 0.4f);
 
         spriteBatch.Draw(_pixel, new Rectangle(cx, cy, cardW, cardH), bgColor);
-        DrawRectOutline(spriteBatch, new Rectangle(cx, cy, cardW, cardH), borderColor, isSelected ? 2 : 1);
 
         if (isSelected)
         {
-            float pulse = MathF.Sin(_timer * 3f) * 0.1f + 0.15f;
-            spriteBatch.Draw(_pixel, new Rectangle(cx, cy, cardW, cardH), borderColor * pulse);
+            // Top highlight accent
+            spriteBatch.Draw(_pixel, new Rectangle(cx, cy, cardW, 2), new Color(255, 220, 140) * alpha * 0.6f);
+            // Subtle inner glow
+            float pulse = MathF.Sin(_timer * 3f) * 0.06f + 0.1f;
+            spriteBatch.Draw(_pixel, new Rectangle(cx, cy, cardW, cardH), new Color(220, 190, 120) * pulse * alpha);
         }
+
+        DrawRectOutline(spriteBatch, new Rectangle(cx, cy, cardW, cardH), borderColor, 1);
 
         // Icon
         drawIcon(spriteBatch, cx + cardW / 2, cy + 50, borderColor);
@@ -182,13 +190,17 @@ public class ReincarnationScene : Scene
         var nameSize = Fonts.Game.MeasureString(name);
         spriteBatch.DrawString(Fonts.Game, name,
             new Vector2(cx + cardW / 2f - nameSize.X * 0.9f / 2f, cy + 100),
-            borderColor, 0, Vector2.Zero, 0.9f, SpriteEffects.None, 0);
+            isSelected ? new Color(255, 240, 190) * alpha : borderColor, 0, Vector2.Zero, 0.9f, SpriteEffects.None, 0);
 
         // Description
         var descSize = Fonts.Game.MeasureString(desc);
         spriteBatch.DrawString(Fonts.Game, desc,
             new Vector2(cx + cardW / 2f - descSize.X * 0.6f / 2f, cy + 130),
             new Color(140, 120, 90) * alpha, 0, Vector2.Zero, 0.6f, SpriteEffects.None, 0);
+
+        // Selection indicator (bottom accent line)
+        if (isSelected)
+            spriteBatch.Draw(_pixel, new Rectangle(cx + 10, cy + cardH - 4, cardW - 20, 2), new Color(220, 190, 120) * alpha * 0.5f);
     }
 
     private void DrawSwordIcon(SpriteBatch spriteBatch, int cx, int cy, Color color)

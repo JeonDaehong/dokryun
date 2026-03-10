@@ -25,6 +25,7 @@ public class ParticleSystem
 {
     private Particle[] _particles;
     private int _count;
+    private int _nextFree; // free-slot hint for O(1) emit
     private static Texture2D _pixel;
 
     public ParticleSystem(int maxParticles = 3000)
@@ -43,8 +44,11 @@ public class ParticleSystem
 
     public void Emit(Vector2 position, Vector2 velocity, Color color, float life, float size, float gravity = 0f, float friction = 0f)
     {
-        for (int i = 0; i < _particles.Length; i++)
+        int len = _particles.Length;
+        // Start from hint, wrap around once
+        for (int j = 0; j < len; j++)
         {
+            int i = (_nextFree + j) % len;
             if (!_particles[i].IsActive)
             {
                 _particles[i] = new Particle
@@ -62,9 +66,30 @@ public class ParticleSystem
                     IsActive = true
                 };
                 _count++;
+                _nextFree = (i + 1) % len;
                 return;
             }
         }
+        // Pool full: recycle oldest (lowest life)
+        int oldest = 0;
+        float lowestLife = float.MaxValue;
+        for (int i = 0; i < len; i++)
+        {
+            if (_particles[i].Life < lowestLife)
+            {
+                lowestLife = _particles[i].Life;
+                oldest = i;
+            }
+        }
+        _particles[oldest] = new Particle
+        {
+            Position = position, Velocity = velocity, Color = color,
+            Life = life, MaxLife = life, Size = size,
+            Rotation = (float)(Random.Shared.NextDouble() * MathHelper.TwoPi),
+            RotationSpeed = (float)(Random.Shared.NextDouble() * 4 - 2),
+            Gravity = gravity, Friction = friction, IsActive = true
+        };
+        _nextFree = (oldest + 1) % len;
     }
 
     /// <summary>Hit spark burst - 타격 이펙트</summary>
@@ -169,6 +194,58 @@ public class ParticleSystem
             var emberColor = Color.Lerp(color, new Color(255, 200, 100), (float)Random.Shared.NextDouble() * 0.5f);
             Emit(position, vel, emberColor, life, 1f + (float)Random.Shared.NextDouble() * 1.5f, 150f);
         }
+    }
+
+    /// <summary>화염 폭발 - 폭발의 운석 전용 대형 폭발</summary>
+    public void EmitFireExplosion(Vector2 position, float radius)
+    {
+        // 1) 거대 화염 파편 - 사방으로 퍼지는 불덩이
+        for (int i = 0; i < 35; i++)
+        {
+            float angle = (float)(Random.Shared.NextDouble() * MathHelper.TwoPi);
+            float speed = 80f + (float)Random.Shared.NextDouble() * 320f;
+            var vel = new Vector2(MathF.Cos(angle), MathF.Sin(angle)) * speed;
+            float life = 0.4f + (float)Random.Shared.NextDouble() * 0.7f;
+            float size = 4f + (float)Random.Shared.NextDouble() * 7f;
+            var fireColor = Color.Lerp(new Color(255, 60, 10), new Color(255, 200, 30), (float)Random.Shared.NextDouble());
+            Emit(position, vel, fireColor, life, size, 80f, 2f);
+        }
+
+        // 2) 중심부 밝은 폭발 코어 (노랑~흰)
+        for (int i = 0; i < 12; i++)
+        {
+            float angle = (float)(Random.Shared.NextDouble() * MathHelper.TwoPi);
+            float speed = 30f + (float)Random.Shared.NextDouble() * 80f;
+            var vel = new Vector2(MathF.Cos(angle), MathF.Sin(angle)) * speed;
+            var coreColor = Color.Lerp(Color.White, new Color(255, 240, 120), (float)Random.Shared.NextDouble());
+            Emit(position + vel * 0.01f, vel * 0.4f, coreColor, 0.12f, 6f + (float)Random.Shared.NextDouble() * 5f);
+        }
+
+        // 3) 검붉은 연기 (느리게 퍼지며 오래 지속)
+        for (int i = 0; i < 20; i++)
+        {
+            float angle = (float)(Random.Shared.NextDouble() * MathHelper.TwoPi);
+            float speed = 20f + (float)Random.Shared.NextDouble() * 60f;
+            var vel = new Vector2(MathF.Cos(angle), MathF.Sin(angle)) * speed + new Vector2(0, -30);
+            float life = 0.6f + (float)Random.Shared.NextDouble() * 1.0f;
+            var smokeColor = Color.Lerp(new Color(80, 30, 10), new Color(180, 80, 20), (float)Random.Shared.NextDouble());
+            Emit(position, vel, smokeColor, life, 5f + (float)Random.Shared.NextDouble() * 6f, 40f, 1f);
+        }
+
+        // 4) 불씨 (위로 솟구치는 잔불)
+        for (int i = 0; i < 25; i++)
+        {
+            float angle = (float)(Random.Shared.NextDouble() * MathHelper.TwoPi);
+            float hSpeed = 40f + (float)Random.Shared.NextDouble() * 100f;
+            var vel = new Vector2(MathF.Cos(angle) * hSpeed, -100f - (float)Random.Shared.NextDouble() * 200f);
+            float life = 0.5f + (float)Random.Shared.NextDouble() * 1.2f;
+            var emberColor = Color.Lerp(new Color(255, 120, 20), new Color(255, 220, 60), (float)Random.Shared.NextDouble());
+            Emit(position, vel, emberColor, life, 1.5f + (float)Random.Shared.NextDouble() * 2.5f, 200f);
+        }
+
+        // 5) 폭발 링 (2중)
+        EmitImpactRing(position, new Color(255, 140, 30), radius, 24);
+        EmitImpactRing(position, new Color(255, 80, 10), radius * 0.65f, 16);
     }
 
     /// <summary>Dash trail - 대시 잔상</summary>

@@ -2,6 +2,7 @@ using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using Dokryun.Engine;
 using Dokryun.Scenes;
+using Dokryun.Systems;
 
 namespace Dokryun;
 
@@ -21,6 +22,7 @@ public class Game1 : Game
     public const int ScreenHeight = 720;
 
     public static CharacterClass SelectedClass { get; set; } = CharacterClass.Archer;
+    public static MeteoriteId? InitialMeteoriteId { get; set; }
 
     public Game1()
     {

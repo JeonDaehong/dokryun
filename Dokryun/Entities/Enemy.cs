@@ -48,6 +48,10 @@ public class Enemy : Entity
     private float _attackTimer;
     private float _attackCooldown = 1f;
 
+    // Cached bounds dimensions
+    private int _boundsWidth;
+    private int _boundsHeight;
+
     // Boss phase & attack state machine
     public int BossPhase { get; set; } = 0;
     public float BossSummonTimer { get; set; }
@@ -79,49 +83,49 @@ public class Enemy : Entity
         {
             // Tier 1
             case EnemyType.Soldier:
-                MaxHP = 20; Speed = 80; Attack = 5; _attackCooldown = 1.2f; AttackRange = 30f;
+                MaxHP = 32; Speed = 80; Attack = 5; _attackCooldown = 1.2f; AttackRange = 30f;
                 break;
             case EnemyType.Archer:
-                MaxHP = 12; Speed = 60; Attack = 8; AttackRange = 200f; _attackCooldown = 2.5f;
+                MaxHP = 19; Speed = 60; Attack = 8; AttackRange = 200f; _attackCooldown = 2.5f;
                 break;
             // Tier 2
             case EnemyType.Warrior:
-                MaxHP = 40; Speed = 120; Attack = 12; _attackCooldown = 1.5f; AttackRange = 35f;
+                MaxHP = 64; Speed = 120; Attack = 12; _attackCooldown = 1.5f; AttackRange = 35f;
                 break;
             case EnemyType.GhostFire:
-                MaxHP = 8; Speed = 100; Attack = 6; _attackCooldown = 0f;
+                MaxHP = 13; Speed = 100; Attack = 6; _attackCooldown = 0f;
                 break;
             case EnemyType.Spearman:
-                MaxHP = 28; Speed = 70; Attack = 9; _attackCooldown = 1.8f; AttackRange = 45f;
+                MaxHP = 45; Speed = 70; Attack = 9; _attackCooldown = 1.8f; AttackRange = 45f;
                 break;
             case EnemyType.ShieldBearer:
-                MaxHP = 65; Speed = 45; Attack = 6; _attackCooldown = 2.0f; AttackRange = 25f;
+                MaxHP = 104; Speed = 45; Attack = 6; _attackCooldown = 2.0f; AttackRange = 25f;
                 break;
             // Tier 3
             case EnemyType.Assassin:
-                MaxHP = 15; Speed = 160; Attack = 14; _attackCooldown = 1.0f; AttackRange = 28f;
+                MaxHP = 24; Speed = 160; Attack = 14; _attackCooldown = 1.0f; AttackRange = 28f;
                 break;
             case EnemyType.Shaman:
-                MaxHP = 18; Speed = 50; Attack = 7; AttackRange = 180f; _attackCooldown = 3.0f;
+                MaxHP = 29; Speed = 50; Attack = 7; AttackRange = 180f; _attackCooldown = 3.0f;
                 break;
             case EnemyType.FireArcher:
-                MaxHP = 16; Speed = 65; Attack = 12; AttackRange = 220f; _attackCooldown = 2.0f;
+                MaxHP = 26; Speed = 65; Attack = 12; AttackRange = 220f; _attackCooldown = 2.0f;
                 break;
             case EnemyType.PoisonThrower:
-                MaxHP = 20; Speed = 55; Attack = 5; AttackRange = 150f; _attackCooldown = 2.5f;
+                MaxHP = 32; Speed = 55; Attack = 5; AttackRange = 150f; _attackCooldown = 2.5f;
                 break;
             // Tier 4
             case EnemyType.DarkKnight:
-                MaxHP = 80; Speed = 90; Attack = 18; _attackCooldown = 1.3f; AttackRange = 35f;
+                MaxHP = 128; Speed = 90; Attack = 18; _attackCooldown = 1.3f; AttackRange = 35f;
                 break;
             case EnemyType.Summoner:
-                MaxHP = 25; Speed = 40; Attack = 5; AttackRange = 250f; _attackCooldown = 4.0f;
+                MaxHP = 40; Speed = 40; Attack = 5; AttackRange = 250f; _attackCooldown = 4.0f;
                 break;
             case EnemyType.BladeDancer:
-                MaxHP = 45; Speed = 130; Attack = 15; _attackCooldown = 1.2f; AttackRange = 30f;
+                MaxHP = 72; Speed = 130; Attack = 15; _attackCooldown = 1.2f; AttackRange = 30f;
                 break;
             case EnemyType.ThunderMonk:
-                MaxHP = 55; Speed = 60; Attack = 20; AttackRange = 120f; _attackCooldown = 3.5f;
+                MaxHP = 88; Speed = 60; Attack = 20; AttackRange = 120f; _attackCooldown = 3.5f;
                 break;
             // Boss
             case EnemyType.DokkaebiKing:
@@ -133,18 +137,22 @@ public class Enemy : Entity
         }
         BaseSpeed = Speed;
         HP = MaxHP;
+        CacheBoundsDimensions();
+    }
+
+    private void CacheBoundsDimensions()
+    {
+        _boundsWidth = IsBoss ? 48 : 20;
+        _boundsHeight = IsBoss ? 48 : 20;
+        if (Type == EnemyType.Warrior || Type == EnemyType.DarkKnight || Type == EnemyType.BladeDancer) { _boundsWidth = 24; _boundsHeight = 24; }
+        if (Type == EnemyType.ShieldBearer) { _boundsWidth = 26; _boundsHeight = 26; }
+        if (Type == EnemyType.GhostFire || Type == EnemyType.Assassin) { _boundsWidth = 16; _boundsHeight = 16; }
+        if (Type == EnemyType.ThunderMonk) { _boundsWidth = 22; _boundsHeight = 22; }
     }
 
     public override void Update(GameTime gameTime)
     {
-        int bw = IsBoss ? 48 : 20;
-        int bh = IsBoss ? 48 : 20;
-        if (Type == EnemyType.Warrior || Type == EnemyType.DarkKnight || Type == EnemyType.BladeDancer) { bw = 24; bh = 24; }
-        if (Type == EnemyType.ShieldBearer) { bw = 26; bh = 26; }
-        if (Type == EnemyType.GhostFire || Type == EnemyType.Assassin) { bw = 16; bh = 16; }
-        if (Type == EnemyType.ThunderMonk) { bw = 22; bh = 22; }
-
-        if (gameTime == null) { UpdateBounds(bw, bh); return; }
+        if (gameTime == null) { UpdateBounds(_boundsWidth, _boundsHeight); return; }
         float dt = (float)gameTime.ElapsedGameTime.TotalSeconds;
         _attackTimer -= dt;
 
@@ -217,7 +225,7 @@ public class Enemy : Entity
             }
         }
 
-        UpdateBounds(bw, bh);
+        UpdateBounds(_boundsWidth, _boundsHeight);
     }
 
     public void MoveToward(Vector2 target, float deltaTime)
@@ -268,7 +276,7 @@ public class Enemy : Entity
     public void StartDeathAnimation()
     {
         IsDeathAnimating = true;
-        DeathTimer = IsBoss ? 0.6f : 0.15f;
+        DeathTimer = IsBoss ? 0.6f : 0.25f;
     }
 
     public override void Draw(SpriteBatch spriteBatch)
@@ -292,17 +300,17 @@ public class Enemy : Entity
         float hpRatio = MaxHP > 0 ? HP / MaxHP : 1f;
         if (hpRatio < 0.5f && !IsDead)
         {
-            float flicker = MathF.Sin((float)DateTime.Now.TimeOfDay.TotalSeconds * 15f) * 0.15f;
+            float flicker = MathF.Sin(Player.GameTime * 15f) * 0.15f;
             color = color * (0.7f + flicker);
         }
 
         float scale = 1f;
         if (IsDeathAnimating)
         {
-            float deathDur = IsBoss ? 0.6f : 0.15f;
+            float deathDur = IsBoss ? 0.6f : 0.25f;
             float t = DeathTimer / deathDur;
-            scale = 1f + (1f - t) * (IsBoss ? 1.5f : 0.5f);
-            color *= t;
+            scale = 1f + (1f - t) * (IsBoss ? 1.5f : 0.3f);
+            color *= t * t; // Quadratic fade for smoother dissolve
         }
 
         if (IsBoss)
@@ -379,13 +387,13 @@ public class Enemy : Entity
                     break;
                 case EnemyType.Summoner:
                     // Floating tome
-                    float bob = MathF.Sin((float)DateTime.Now.TimeOfDay.TotalSeconds * 4f) * 2f;
+                    float bob = MathF.Sin(Player.GameTime * 4f) * 2f;
                     Player.DrawRect(spriteBatch, new Rectangle(px + 8, (int)(py - 8 + bob), 6, 8), new Color(80, 50, 120));
                     Player.DrawRect(spriteBatch, new Rectangle(px + 9, (int)(py - 6 + bob), 4, 4), new Color(200, 150, 255));
                     break;
                 case EnemyType.BladeDancer:
                     // Spinning blades indicator
-                    float spin = (float)DateTime.Now.TimeOfDay.TotalSeconds * 6f;
+                    float spin = Player.GameTime * 6f;
                     int bx1 = px + (int)(MathF.Cos(spin) * 12);
                     int by1 = py + (int)(MathF.Sin(spin) * 12);
                     int bx2 = px + (int)(MathF.Cos(spin + MathF.PI) * 12);
@@ -395,7 +403,7 @@ public class Enemy : Entity
                     break;
                 case EnemyType.ThunderMonk:
                     // Lightning aura
-                    float pulse = MathF.Sin((float)DateTime.Now.TimeOfDay.TotalSeconds * 8f) * 0.2f + 0.3f;
+                    float pulse = MathF.Sin(Player.GameTime * 8f) * 0.2f + 0.3f;
                     Player.DrawRect(spriteBatch, new Rectangle(px - w / 2 - 3, py - h / 2 - 3, w + 6, h + 6),
                         new Color(130, 130, 255) * pulse);
                     // Prayer beads
@@ -407,12 +415,19 @@ public class Enemy : Entity
         float hpRatio = MaxHP > 0 ? HP / MaxHP : 1f;
         if (!IsDead && !IsDeathAnimating && hpRatio < 1f)
         {
-            int barW = baseW + 4;
+            int barW = baseW + 6;
             int barH = 3;
             int barX = px - barW / 2;
-            int barY = py - baseH / 2 - 6;
-            Player.DrawRect(spriteBatch, new Rectangle(barX, barY, barW, barH), new Color(40, 10, 10));
-            Player.DrawRect(spriteBatch, new Rectangle(barX, barY, (int)(barW * hpRatio), barH), new Color(220, 40, 40));
+            int barY = py - baseH / 2 - 7;
+            // Background
+            Player.DrawRect(spriteBatch, new Rectangle(barX - 1, barY - 1, barW + 2, barH + 2), new Color(0, 0, 0) * 0.5f);
+            Player.DrawRect(spriteBatch, new Rectangle(barX, barY, barW, barH), new Color(30, 8, 8));
+            // HP fill with color based on ratio
+            var hpBarColor = hpRatio > 0.5f ? new Color(200, 50, 40) : new Color(255, 60, 40);
+            int fillW = (int)(barW * hpRatio);
+            Player.DrawRect(spriteBatch, new Rectangle(barX, barY, fillW, barH), hpBarColor);
+            // Top highlight
+            Player.DrawRect(spriteBatch, new Rectangle(barX, barY, fillW, 1), new Color(255, 120, 100) * 0.4f);
         }
     }
 
@@ -430,7 +445,7 @@ public class Enemy : Entity
             return;
         }
 
-        float time = (float)DateTime.Now.TimeOfDay.TotalSeconds;
+        float time = Player.GameTime;
 
         // Body (large, greenish)
         Player.DrawRect(spriteBatch, new Rectangle(px - baseW / 2, py - baseH / 2 + 6, baseW, baseH - 6), color);

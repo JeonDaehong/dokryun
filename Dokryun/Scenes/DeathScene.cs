@@ -27,6 +27,8 @@ public class DeathScene : Scene
         _particles = new ParticleSystem(300);
         _timer = 0;
 
+        AudioManager.StopBgm();
+
         for (int i = 0; i < 60; i++)
         {
             float angle = (float)(Random.Shared.NextDouble() * MathHelper.TwoPi);
@@ -68,7 +70,7 @@ public class DeathScene : Scene
 
     public override void Draw(SpriteBatch spriteBatch)
     {
-        GraphicsDevice.Clear(new Color(8, 5, 3));
+        GraphicsDevice.Clear(new Color(6, 4, 2));
 
         spriteBatch.Begin(samplerState: SamplerState.PointClamp);
 
@@ -76,15 +78,19 @@ public class DeathScene : Scene
 
         float fadeIn = MathF.Min(1f, _timer * 1.5f);
 
-        DrawReincarnationSymbol(spriteBatch, new Vector2(Game1.ScreenWidth / 2f, Game1.ScreenHeight / 2f - 80), fadeIn);
+        DrawReincarnationSymbol(spriteBatch, new Vector2(Game1.ScreenWidth / 2f, Game1.ScreenHeight / 2f - 85), fadeIn);
 
         if (_timer > 0.8f)
         {
             float textAlpha = MathF.Min(1f, (_timer - 0.8f) * 2f);
-            var color = new Color(200, 160, 100) * textAlpha;
+            var color = new Color(210, 170, 110) * textAlpha;
 
             string reborn = "윤 회";
             var rebornSize = Fonts.Title.MeasureString(reborn);
+            // Shadow
+            spriteBatch.DrawString(Fonts.Title, reborn,
+                new Vector2(Game1.ScreenWidth / 2f - rebornSize.X / 2f + 2, Game1.ScreenHeight / 2f - 18),
+                new Color(0, 0, 0) * textAlpha * 0.5f);
             spriteBatch.DrawString(Fonts.Title, reborn,
                 new Vector2(Game1.ScreenWidth / 2f - rebornSize.X / 2f, Game1.ScreenHeight / 2f - 20),
                 color);
@@ -93,17 +99,23 @@ public class DeathScene : Scene
         if (_timer > 1.5f)
         {
             float statAlpha = MathF.Min(1f, (_timer - 1.5f) * 2f);
-            var statColor = new Color(140, 120, 90) * statAlpha;
-            int cy = Game1.ScreenHeight / 2 + 40;
+            int cy = Game1.ScreenHeight / 2 + 35;
 
-            DrawCenteredText(spriteBatch, Fonts.Game, $"도달 깊이 : 지하 {_floor}층", cy, statColor);
-            DrawCenteredText(spriteBatch, Fonts.Game, $"처치 수 : {_totalKills}", cy + 28, statColor);
+            // Stat cards with subtle background
+            int cardW = 220;
+            int cardH = 60;
+            int cardX = Game1.ScreenWidth / 2 - cardW / 2;
+            spriteBatch.Draw(_pixel, new Rectangle(cardX, cy - 6, cardW, cardH), new Color(0, 0, 0) * statAlpha * 0.3f);
+            spriteBatch.Draw(_pixel, new Rectangle(cardX, cy - 6, 2, cardH), new Color(200, 160, 100) * statAlpha * 0.3f);
+
+            DrawCenteredText(spriteBatch, Fonts.Game, $"도달 깊이 : 지하 {_floor}층", cy, new Color(200, 175, 120) * statAlpha);
+            DrawCenteredText(spriteBatch, Fonts.Game, $"처치 수 : {_totalKills}", cy + 28, new Color(160, 140, 105) * statAlpha);
         }
 
         if (_canContinue)
         {
-            float blink = MathF.Sin(_timer * 3f) * 0.4f + 0.6f;
-            DrawCenteredText(spriteBatch, Fonts.Game, "[ Enter 키로 다시 윤회 ]",
+            float blink = MathF.Sin(_timer * 2.5f) * 0.3f + 0.7f;
+            DrawCenteredText(spriteBatch, Fonts.Game, "Enter 키로 다시 윤회",
                 Game1.ScreenHeight - 80, new Color(150, 130, 100) * blink);
         }
 

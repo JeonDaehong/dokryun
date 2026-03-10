@@ -48,6 +48,10 @@ public class ChungcheongVillageScene : Scene
         }
         _player.Position = new Vector2(400, 480);
         _player.Speed = 150f;
+
+        // BGM
+        AudioManager.LoadBgm(Content, "chungcheong", "Audio/section_1");
+        AudioManager.PlayBgm("chungcheong");
     }
 
     public override void Update(GameTime gameTime)

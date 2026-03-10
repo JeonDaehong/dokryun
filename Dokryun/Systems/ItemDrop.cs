@@ -73,8 +73,8 @@ public static class MeteoriteDatabase
             MeteoriteRarity.White, true, s => s.MaxHPBonus += 50f,
             new Color(100, 220, 120), new Color(70, 190, 90)),
 
-        [MeteoriteId.GuardFragment] = new(MeteoriteId.GuardFragment, "수호의 운석 파편", "방어력 +5",
-            MeteoriteRarity.White, true, s => s.Defense += 5f,
+        [MeteoriteId.GuardFragment] = new(MeteoriteId.GuardFragment, "수호의 운석 파편", "방어력 +2",
+            MeteoriteRarity.White, true, s => s.Defense += 2f,
             new Color(160, 180, 200), new Color(130, 150, 170)),
 
         // ===== 고유 운석 =====

@@ -1,20 +1,28 @@
 using Microsoft.Xna.Framework.Audio;
+using Microsoft.Xna.Framework.Content;
+using Microsoft.Xna.Framework.Media;
 
 namespace Dokryun.Engine;
 
 /// <summary>
 /// 프로시저럴 사운드 이펙트 매니저 - wav 파일 없이 코드로 생성
+/// BGM 재생 기능 포함
 /// </summary>
 public static class AudioManager
 {
     private static float _masterVolume = 0.35f;
     private static float _sfxVolume = 0.7f;
+    private static float _bgmVolume = 0.4f;
     private static readonly Dictionary<string, SoundEffect> _cache = new();
     private static bool _initialized;
 
     // Cooldown to prevent sound spam
     private static readonly Dictionary<string, float> _lastPlayTime = new();
     private static float _globalTime;
+
+    // BGM
+    private static readonly Dictionary<string, Song> _bgmCache = new();
+    private static string _currentBgm;
 
     public static float MasterVolume
     {
@@ -26,6 +34,47 @@ public static class AudioManager
     {
         get => _sfxVolume;
         set => _sfxVolume = Math.Clamp(value, 0f, 1f);
+    }
+
+    public static float BgmVolume
+    {
+        get => _bgmVolume;
+        set
+        {
+            _bgmVolume = Math.Clamp(value, 0f, 1f);
+            try { MediaPlayer.Volume = _masterVolume * _bgmVolume; } catch { }
+        }
+    }
+
+    public static void LoadBgm(ContentManager content, string name, string assetPath)
+    {
+        if (_bgmCache.ContainsKey(name)) return;
+        try
+        {
+            _bgmCache[name] = content.Load<Song>(assetPath);
+        }
+        catch { /* ignore missing audio */ }
+    }
+
+    public static void PlayBgm(string name)
+    {
+        if (_currentBgm == name) return;
+        if (!_bgmCache.TryGetValue(name, out var song)) return;
+        try
+        {
+            MediaPlayer.Stop();
+            MediaPlayer.IsRepeating = true;
+            MediaPlayer.Volume = _masterVolume * _bgmVolume;
+            MediaPlayer.Play(song);
+            _currentBgm = name;
+        }
+        catch { }
+    }
+
+    public static void StopBgm()
+    {
+        try { MediaPlayer.Stop(); } catch { }
+        _currentBgm = null;
     }
 
     public static void Initialize()

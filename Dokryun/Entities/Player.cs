@@ -10,11 +10,13 @@ public class Player : Entity
     public float HP { get; set; } = 100f;
     public float MaxKi { get; set; } = 50f;
     public float Ki { get; set; } = 50f;
-    public float KiRegen { get; set; } = 5f;
+    public float KiRegen { get; set; } = 1f;
     public float Speed { get; set; } = 200f;
     public float Attack { get; set; } = 12f;
     public float CritRate { get; set; } = 0.05f;
     public float BaseAttackCooldown { get; set; } = 0.35f;
+
+    public static float GameTime { get; set; }
 
     public bool IsDead => HP <= 0;
     public bool IsDashing { get; private set; }
@@ -48,6 +50,7 @@ public class Player : Entity
     private float _slashTimer;
     private float _slashAngle;
     private const float SlashDuration = 0.2f;
+    public bool FlameSlash { get; set; }
 
     // Combo system (swordsman)
     public int ComboStep { get; private set; } // 0=약, 1=중, 2=강
@@ -289,7 +292,7 @@ public class Player : Entity
         // Invincible blinking
         if (IsInvincible)
         {
-            float blink = MathF.Sin((float)DateTime.Now.TimeOfDay.TotalSeconds * 30f);
+            float blink = MathF.Sin(GameTime * 30f);
             color *= blink > 0 ? 0.9f : 0.4f;
         }
 
@@ -313,12 +316,22 @@ public class Player : Entity
         }
         else
         {
-            // Fallback: placeholder rectangles
-            var bodyRect = new Rectangle((int)drawPos.X - 10, (int)drawPos.Y - 14, 20, 28);
-            DrawRect(spriteBatch, bodyRect, color);
+            // Fallback: placeholder rectangles with better proportions
+            int px = (int)drawPos.X;
+            int py = (int)drawPos.Y;
 
-            var headRect = new Rectangle((int)drawPos.X - 7, (int)drawPos.Y - 16, 14, 8);
-            DrawRect(spriteBatch, headRect, new Color(200, 190, 170) * (color.A / 255f));
+            // Shadow
+            DrawRect(spriteBatch, new Rectangle(px - 8, py + 12, 16, 4), new Color(0, 0, 0) * 0.25f);
+
+            // Body
+            DrawRect(spriteBatch, new Rectangle(px - 9, py - 10, 18, 24), color);
+            // Shoulders
+            DrawRect(spriteBatch, new Rectangle(px - 11, py - 8, 22, 6), color * 0.9f);
+            // Head
+            var headColor = Color.Lerp(color, new Color(220, 210, 195), 0.2f);
+            DrawRect(spriteBatch, new Rectangle(px - 6, py - 18, 12, 10), headColor);
+            // Hair/hat accent
+            DrawRect(spriteBatch, new Rectangle(px - 7, py - 19, 14, 3), new Color(80, 60, 40) * (color.A / 255f));
         }
 
         // Sword slash - combo-dependent crescent arc
@@ -334,7 +347,9 @@ public class Player : Entity
             float outerRadius = combo switch { 1 => 65f, 2 => 75f, _ => 95f };
             float thickness = combo switch { 1 => 20f, 2 => 28f, _ => 38f };
             float sweepSpeed = combo switch { 1 => 3f, 2 => 3f, _ => 2.5f };
-            Color slashTint = combo switch { 1 => Color.White, 2 => new Color(220, 230, 255), _ => new Color(255, 240, 180) };
+            Color slashTint = FlameSlash
+                ? combo switch { 1 => new Color(255, 180, 60), 2 => new Color(255, 140, 40), _ => new Color(255, 100, 20) }
+                : combo switch { 1 => Color.White, 2 => new Color(220, 230, 255), _ => new Color(255, 240, 180) };
 
             float sweepProgress = MathF.Min(1f, progress * sweepSpeed);
             // 강(3): sweep direction reversed for variety
@@ -374,10 +389,25 @@ public class Player : Entity
                 float gx = drawPos.X + MathF.Cos(angle) * (outerR + 3f);
                 float gy = drawPos.Y + MathF.Sin(angle) * (outerR + 3f);
                 float glowSize = (combo == 3 ? 5f : 3f) * crescentT * alpha;
+                if (FlameSlash) glowSize *= 1.8f;
                 if (glowSize > 0.5f)
                 {
-                    var glowColor = combo == 3 ? new Color(255, 220, 120) : new Color(200, 220, 255);
-                    DrawRect(spriteBatch, new Rectangle((int)(gx - glowSize / 2), (int)(gy - glowSize / 2), (int)glowSize + 1, (int)glowSize + 1), glowColor * (alpha * 0.6f));
+                    var glowColor = FlameSlash
+                        ? new Color(255, 120 + (int)(crescentT * 100), 20)
+                        : combo == 3 ? new Color(255, 220, 120) : new Color(200, 220, 255);
+                    DrawRect(spriteBatch, new Rectangle((int)(gx - glowSize / 2), (int)(gy - glowSize / 2), (int)glowSize + 1, (int)glowSize + 1), glowColor * (alpha * 0.7f));
+                }
+
+                // Flame flicker particles along the arc
+                if (FlameSlash && crescentT > 0.3f && i % 3 == 0)
+                {
+                    float flameR = outerR + 5f + (float)Math.Sin(Player.GameTime * 20f + angle * 5f) * 4f;
+                    float fx = drawPos.X + MathF.Cos(angle) * flameR;
+                    float fy = drawPos.Y + MathF.Sin(angle) * flameR;
+                    float flameSize = (3f + crescentT * 5f) * alpha;
+                    float flicker = 0.6f + 0.4f * MathF.Sin(Player.GameTime * 30f + i * 2f);
+                    var flameColor = Color.Lerp(new Color(255, 60, 10), new Color(255, 220, 50), MathF.Sin(Player.GameTime * 15f + angle * 3f) * 0.5f + 0.5f);
+                    DrawRect(spriteBatch, new Rectangle((int)(fx - flameSize / 2), (int)(fy - flameSize / 2), (int)flameSize + 1, (int)flameSize + 1), flameColor * (alpha * flicker * 0.8f));
                 }
             }
         }
