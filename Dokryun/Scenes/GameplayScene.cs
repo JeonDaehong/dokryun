@@ -237,59 +237,12 @@ public class GameplayScene : Scene
         _floorTimer = 0;
         _dangerLevel = 0;
 
-        // Debug: boss skip portal near spawn (only on non-boss floors)
-        if (!_isBossFloor)
+        // (포탈/층이동 제거됨 - 1층만 사용)
+
+        // === 적 스폰 비활성화 (리메이크 중) ===
+        _floorEnemyCount = 0;
+
         {
-            var bossPortalPos = _tileMap.PlayerSpawn + new Vector2(40, 0);
-            _dungeonObjects.Add(new DungeonObject
-            {
-                Position = bossPortalPos,
-                Type = DungeonObjectType.BossPortal,
-                InteractRadius = 30f
-            });
-        }
-
-        if (_isBossFloor)
-        {
-            // Boss floor: spawn the boss
-            if (_tileMap.BossSpawn.HasValue)
-            {
-                _boss = new Enemy(_currentStage.BossType, _tileMap.BossSpawn.Value);
-                float bossScale = 1f + (_floor - 1) * 0.15f;
-                _boss.MaxHP = (int)(_boss.MaxHP * bossScale);
-                _boss.HP = _boss.MaxHP;
-                _boss.Attack *= bossScale;
-                _trailingBossHP = _boss.MaxHP;
-                _prevBossHP = _boss.MaxHP;
-                _enemies.Add(_boss);
-            }
-            _floorEnemyCount = 1;
-        }
-        else
-        {
-            // Normal floor: spawn regular enemies (with elite chance)
-            _floorEnemyCount = _tileMap.EnemySpawns.Count;
-
-            foreach (var spawnPos in _tileMap.EnemySpawns)
-            {
-                EnemyType type = RollEnemyType(_floor);
-                var enemy = new Enemy(type, spawnPos);
-                float scale = 1f + (_floor - 1) * 0.12f;
-                enemy.MaxHP = (int)(enemy.MaxHP * scale);
-                enemy.HP = enemy.MaxHP;
-                enemy.Attack *= scale;
-
-                // Elite chance
-                if (EliteSystem.ShouldBeElite(_floor))
-                {
-                    enemy.IsElite = true;
-                    enemy.EliteModifier = EliteSystem.RollModifier();
-                    EliteSystem.ApplyModifier(enemy, enemy.EliteModifier);
-                }
-
-                _enemies.Add(enemy);
-            }
-
             // Treasure chests
             foreach (var tpos in _tileMap.TreasurePositions)
             {
@@ -847,38 +800,7 @@ public class GameplayScene : Scene
                 _droppedItems.Add(DroppedItem.Create(_boss.Position, _floor, true));
         }
 
-        // Portal activation
-        if (!_portalActive)
-        {
-            bool shouldActivate = _isBossFloor
-                ? _bossDefeated
-                : (_floorEnemyCount > 0 && (float)_floorKills / _floorEnemyCount >= 0.5f);
-
-            if (shouldActivate)
-            {
-                _portalActive = true;
-                var (px, py) = _tileMap.WorldToTile(_tileMap.PortalPosition);
-                _tileMap.SetTile(px, py, TileType.Portal);
-                FlashScreen(new Color(80, 200, 220), 0.15f);
-                _particles.EmitExplosion(_tileMap.PortalPosition, 30, new Color(80, 200, 220));
-                _particles.EmitImpactRing(_tileMap.PortalPosition, new Color(80, 200, 220), 50f, 20);
-                AudioManager.Play("portal", 0.7f, 0f);
-                _itemPickupText = "포탈이 열렸다! (미니맵 확인)";
-                _itemPickupTimer = 3f;
-                _itemPickupColor = new Color(80, 200, 220);
-            }
-        }
-
-        // Portal interaction - go directly to next floor
-        if (_portalActive && Vector2.Distance(_player.Position, _tileMap.PortalPosition) < 30f)
-        {
-            if (InputManager.IsKeyPressed(Keys.E))
-            {
-                _state = GameState.FloorTransition;
-                _floorTransitionTimer = 1.5f;
-                GenerateFloor();
-            }
-        }
+        // (포탈 제거됨 - 1층만 사용)
 
         // Dungeon objects interaction
         foreach (var obj in _dungeonObjects)
@@ -915,20 +837,7 @@ public class GameplayScene : Scene
                     obj.IsActive = false;
                     AudioManager.Play("pickup", 0.5f, 0.2f);
                     break;
-                case DungeonObjectType.BossPortal:
-                    if (InputManager.IsKeyPressed(Keys.E))
-                    {
-                        obj.IsActive = false;
-                        _particles.EmitExplosion(obj.Position, 20, new Color(220, 40, 40));
-                        FlashScreen(new Color(200, 50, 50), 0.2f);
-                        AudioManager.Play("portal", 0.8f, -0.2f);
-                        _floor = _currentStage.FloorCount - 1;
-                        _state = GameState.FloorTransition;
-                        _floorTransitionTimer = 1.5f;
-                        GenerateFloor();
-                        return;
-                    }
-                    break;
+                // BossPortal 제거됨
 
                 // Event room objects
                 case DungeonObjectType.ShopNPC:
@@ -3351,16 +3260,7 @@ public class GameplayScene : Scene
                 new Color(200, 170, 50), 1);
         }
 
-        // Portal
-        if (_portalActive && Vector2.Distance(_player.Position, _tileMap.PortalPosition) < 40f)
-        {
-            float bob = MathF.Sin(_gameTimer * 3f) * 2f;
-            var promptPos = _tileMap.PortalPosition + new Vector2(0, -30 + bob);
-            spriteBatch.Draw(_pixel, new Rectangle((int)promptPos.X - 7, (int)promptPos.Y - 5, 14, 12),
-                new Color(20, 40, 45));
-            DrawRectOutline(spriteBatch, new Rectangle((int)promptPos.X - 7, (int)promptPos.Y - 5, 14, 12),
-                new Color(80, 200, 220), 1);
-        }
+        // (포탈 UI 제거됨)
     }
 
     private void DrawEnemyTelegraphs(SpriteBatch spriteBatch)

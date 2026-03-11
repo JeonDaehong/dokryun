@@ -4,8 +4,8 @@ namespace Dokryun.Dungeon;
 
 public static class DungeonGenerator
 {
-    private const int MinLeafSize = 18;
-    private const int MinRoomSize = 10;
+    private const int MinLeafSize = 10;
+    private const int MinRoomSize = 6;
     private const int CorridorWidth = 4;
 
     public static TileMap Generate(int floor, Random rng, bool isBossFloor = false)
@@ -13,9 +13,9 @@ public static class DungeonGenerator
         if (isBossFloor)
             return GenerateBossFloor(rng);
 
-        // Map size scales with floor (large maps for dense combat)
-        int width = 120 + Math.Min(floor * 8, 60);
-        int height = 90 + Math.Min(floor * 6, 50);
+        // Map size scales with floor (reduced to 1/4 area)
+        int width = 60 + Math.Min(floor * 4, 30);
+        int height = 45 + Math.Min(floor * 3, 25);
 
         var map = new TileMap(width, height);
         var rooms = new List<Rectangle>();
@@ -34,16 +34,10 @@ public static class DungeonGenerator
         map.PlayerSpawn = entranceCenter;
         map.SetTile(entrance.X + entrance.Width / 2, entrance.Y + entrance.Height / 2, TileType.Entrance);
 
-        // Portal (farthest room)
-        var portalRoom = FindFarthestRoom(rooms, entrance);
-        int portalX = portalRoom.X + portalRoom.Width / 2;
-        int portalY = portalRoom.Y + portalRoom.Height / 2;
-        map.SetTile(portalX, portalY, TileType.PortalLocked);
-        map.PortalPosition = map.TileToWorld(portalX, portalY);
+        // 포탈 제거됨 (1층만 사용)
 
         int treasureCount = 6 + rng.Next(5); // 6~10 per floor
-        PlaceTreasures(map, rooms, entrance, portalRoom, treasureCount, rng);
-        PlaceEnemies(map, rooms, entrance, floor, rng);
+        PlaceTreasures(map, rooms, entrance, entrance, treasureCount, rng);
 
         return map;
     }

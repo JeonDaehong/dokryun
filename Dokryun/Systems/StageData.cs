@@ -20,7 +20,7 @@ public class StageData
             Region = "충청도",
             BossName = "월악 도깨비왕",
             Theme = ThemeType.ChungcheongMountain,
-            FloorCount = 5,
+            FloorCount = 99, // 1층만 사용 (적 리메이크 중)
             BossType = EnemyType.DokkaebiKing
         }
         // Future stages can be added here
