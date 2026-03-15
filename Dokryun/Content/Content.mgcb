@@ -20,14 +20,7 @@
 /processorParam:TextureFormat=Color
 /build:Fonts/GameFont.spritefont
 
-#begin Fonts/TitleFont.spritefont
-/importer:FontDescriptionImporter
-/processor:FontDescriptionProcessor
-/processorParam:PremultiplyAlpha=True
-/processorParam:TextureFormat=Color
-/build:Fonts/TitleFont.spritefont
-
-#begin Sprites/Move.png
+#begin Sprites/enemy_1_idle.png
 /importer:TextureImporter
 /processor:TextureProcessor
 /processorParam:ColorKeyColor=255,0,255,255
@@ -37,9 +30,9 @@
 /processorParam:ResizeToPowerOfTwo=False
 /processorParam:MakeSquare=False
 /processorParam:TextureFormat=Color
-/build:Sprites/Move.png
+/build:Sprites/enemy_1_idle.png
 
-#begin Sprites/Idle.png
+#begin Sprites/player_1_idle.png
 /importer:TextureImporter
 /processor:TextureProcessor
 /processorParam:ColorKeyColor=255,0,255,255
@@ -49,9 +42,9 @@
 /processorParam:ResizeToPowerOfTwo=False
 /processorParam:MakeSquare=False
 /processorParam:TextureFormat=Color
-/build:Sprites/Idle.png
+/build:Sprites/player_1_idle.png
 
-#begin Sprites/attack.png
+#begin Sprites/stage1_background.png
 /importer:TextureImporter
 /processor:TextureProcessor
 /processorParam:ColorKeyColor=255,0,255,255
@@ -61,11 +54,5 @@
 /processorParam:ResizeToPowerOfTwo=False
 /processorParam:MakeSquare=False
 /processorParam:TextureFormat=Color
-/build:Sprites/attack.png
-
-#begin Audio/section_1.mp3
-/importer:Mp3Importer
-/processor:SongProcessor
-/processorParam:Quality=Best
-/build:Audio/section_1.mp3
+/build:Sprites/stage1_background.png
 
