@@ -12,10 +12,13 @@
       "Bash(ls D:/Dokryun/*.sln D:/Dokryun/*.csproj D:/Dokryun/Dokryun/*.csproj)",
       "Bash(powershell -c \"Add-Type -AssemblyName System.Drawing; $img=[System.Drawing.Image]::FromFile\\(''D:\\\\Dokryun\\\\Dokryun\\\\Content\\\\Sprites\\\\enemy_1_idle.png''\\); Write-Host $img.Width ''x'' $img.Height\")",
       "Bash(powershell \"Add-Type -AssemblyName System.Drawing; [System.Drawing.Image]::FromFile\\(''D:\\\\Dokryun\\\\Dokryun\\\\Content\\\\Sprites\\\\enemy_1_idle.png''\\).Width; [System.Drawing.Image]::FromFile\\(''D:\\\\Dokryun\\\\Dokryun\\\\Content\\\\Sprites\\\\enemy_1_idle.png''\\).Height\")",
-      "Bash(find d:/Dokryun -name crash* -o -name debug* -o -name *.log)"
+      "Bash(find d:/Dokryun -name crash* -o -name debug* -o -name *.log)",
+      "Bash(find . -name \"*.cs\" -not -path \"*/obj/*\" -exec wc -l {} +)",
+      "Bash(dotnet build:*)"
     ],
     "additionalDirectories": [
-      "d:\\Dokryun\\Dokryun\\Engine"
+      "d:\\Dokryun\\Dokryun\\Engine",
+      "d:\\Dokryun\\Dokryun"
     ]
   }
 }
