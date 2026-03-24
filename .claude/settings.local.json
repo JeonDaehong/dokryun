@@ -18,7 +18,8 @@
     ],
     "additionalDirectories": [
       "d:\\Dokryun\\Dokryun\\Engine",
-      "d:\\Dokryun\\Dokryun"
+      "d:\\Dokryun\\Dokryun",
+      "D:\\Dokryun\\Dokryun\\Entities"
     ]
   }
 }

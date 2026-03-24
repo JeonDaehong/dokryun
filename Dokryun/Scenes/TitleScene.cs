@@ -45,7 +45,7 @@ public class TitleScene : Scene
         {
             if (_startButton.Contains(mousePos))
             {
-                SceneManager.ChangeScene(new MapScene(), fadeDuration: 0.8f);
+                SceneManager.ChangeScene(new GameplayScene(), fadeDuration: 0.8f);
             }
             else if (_exitButton.Contains(mousePos))
             {
